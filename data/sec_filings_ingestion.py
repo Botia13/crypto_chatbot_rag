@@ -8,6 +8,9 @@ Part I and Part II.
 
 from __future__ import annotations
 
+import argparse
+import logging
+import os
 import re
 import time
 import warnings
@@ -25,6 +28,9 @@ from bs4 import BeautifulSoup, Tag, XMLParsedAsHTMLWarning
 from bs4.element import NavigableString
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 TEN_K_ITEMS: Sequence[str] = (
@@ -217,6 +223,18 @@ def _extract_metadata(soup: BeautifulSoup) -> Dict[str, Optional[str]]:
             _first_xbrl_value(soup, "dei:DocumentPeriodEndDate")
         ),
     }
+
+
+def _normalize_form_type(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    normalized = _clean_inline(value).upper().replace("FORM", "").strip()
+    normalized = normalized.replace("_", "-").replace(" ", "-")
+    if normalized in {"10K", "10-K"}:
+        return "10-K"
+    if normalized in {"10Q", "10-Q"}:
+        return "10-Q"
+    return normalized
 
 
 def _target_ids(soup: BeautifulSoup) -> set:
@@ -491,6 +509,9 @@ def parse_filing_html(
     html: str,
     *,
     filing_date: Optional[str] = None,
+    period_end: Optional[str] = None,
+    ticker: Optional[str] = None,
+    form_type: Optional[str] = None,
 ) -> Dict[str, object]:
     """Parse one SEC filing HTML document into the requested row schema.
 
@@ -506,24 +527,28 @@ def parse_filing_html(
         warnings.simplefilter("ignore", XMLParsedAsHTMLWarning)
         soup = BeautifulSoup(html, "lxml")
     metadata = _extract_metadata(soup)
-    form_type = metadata.get("form_type")
-    if form_type not in {"10-K", "10-Q"}:
+    parsed_form_type = _normalize_form_type(
+        metadata.get("form_type") or form_type
+    )
+    metadata["ticker"] = metadata.get("ticker") or _clean_inline(ticker or "") or None
+    metadata["period_end"] = metadata.get("period_end") or _iso_date(period_end)
+    if parsed_form_type not in {"10-K", "10-Q"}:
         raise FilingParseError(
-            f"Expected a 10-K or 10-Q, found {form_type!r}."
+            f"Expected a 10-K or 10-Q, found {parsed_form_type!r}."
         )
     missing = [
         key for key in ("company_name", "ticker", "period_end")
         if not metadata.get(key)
     ]
     if missing:
-        raise FilingParseError(f"Missing required inline-XBRL metadata: {missing}")
+        raise FilingParseError(f"Missing required filing metadata: {missing}")
 
     text, _ = _render_document(soup)
-    sections = _extract_sections(text, str(form_type))
+    sections = _extract_sections(text, parsed_form_type)
     return {
         "company_name": metadata["company_name"],
         "ticker": metadata["ticker"],
-        "form_type": form_type,
+        "form_type": parsed_form_type,
         "filing_date": _iso_date(filing_date),
         "period_end": metadata["period_end"],
         "sections": sections,
@@ -546,15 +571,36 @@ def filing_index_url(document_url: str) -> Optional[str]:
 def parse_filing_date(index_html: str) -> Optional[str]:
     """Extract the filing date from an SEC filing-detail HTML page."""
 
+    return parse_filing_details(index_html)["filing_date"]
+
+
+def parse_filing_details(index_html: str) -> Dict[str, Optional[str]]:
+    """Extract authoritative dates from an SEC filing-detail HTML page."""
+
     soup = BeautifulSoup(index_html, "lxml")
+    details: Dict[str, Optional[str]] = {
+        "filing_date": None,
+        "period_end": None,
+    }
+    labels = {
+        "filing date": "filing_date",
+        "period of report": "period_end",
+    }
     for head in soup.find_all(class_="infoHead"):
-        if _clean_inline(head.get_text(" ", strip=True)).casefold() != "filing date":
+        label = _clean_inline(head.get_text(" ", strip=True)).casefold()
+        key = labels.get(label)
+        if key is None:
             continue
         info = head.find_next_sibling(class_="info")
         if info:
-            return _iso_date(info.get_text(" ", strip=True))
-    match = re.search(r"Filing\s+Date\s+(20\d{2}-\d{2}-\d{2})", soup.get_text(" "))
-    return match.group(1) if match else None
+            details[key] = _iso_date(info.get_text(" ", strip=True))
+    if not details["filing_date"]:
+        match = re.search(
+            r"Filing\s+Date\s+(20\d{2}-\d{2}-\d{2})",
+            soup.get_text(" "),
+        )
+        details["filing_date"] = match.group(1) if match else None
+    return details
 
 
 def _arrow_schema() -> pa.Schema:
@@ -589,6 +635,8 @@ def filings_to_parquet(
     url_column: str = "url",
     user_agent: str,
     filing_date_column: Optional[str] = None,
+    ticker_column: Optional[str] = None,
+    form_type_column: Optional[str] = None,
     compression: str = "zstd",
     min_request_interval: float = 0.12,
 ) -> Path:
@@ -607,6 +655,10 @@ def filings_to_parquet(
     filing_date_column:
         Optional input column containing ISO filing dates. If absent or null,
         the authoritative date is fetched from each SEC filing-detail page.
+    ticker_column:
+        Optional input column used when a filing omits its inline-XBRL ticker.
+    form_type_column:
+        Optional input column used when a filing omits its inline-XBRL form.
     compression:
         Arrow Parquet compression codec; ``zstd`` is a good default for text.
     min_request_interval:
@@ -626,10 +678,19 @@ def filings_to_parquet(
         raise KeyError(
             f"DataFrame has no filing-date column named {filing_date_column!r}"
         )
+    for column_name, purpose in (
+        (ticker_column, "ticker"),
+        (form_type_column, "form type"),
+    ):
+        if column_name and column_name not in filings.columns:
+            raise KeyError(
+                f"DataFrame has no {purpose} column named {column_name!r}"
+            )
     if filings.empty:
         raise ValueError("filings DataFrame is empty")
 
     rows: List[Dict[str, object]] = []
+    total = len(filings)
     with SecClient(
         user_agent,
         min_request_interval=min_request_interval,
@@ -638,6 +699,7 @@ def filings_to_parquet(
             url = str(input_row[url_column]).strip()
             if not url or url.casefold() == "nan":
                 raise ValueError(f"Row {row_number} has an empty filing URL")
+            LOGGER.info("Processing filing %d/%d: %s", row_number, total, url)
 
             supplied_date: Optional[str] = None
             if filing_date_column:
@@ -646,6 +708,7 @@ def filings_to_parquet(
                     supplied_date = _iso_date(str(value))
 
             filing_date = supplied_date
+            period_end: Optional[str] = None
             if not filing_date:
                 index_url = filing_index_url(url)
                 if not index_url:
@@ -653,14 +716,30 @@ def filings_to_parquet(
                         f"Cannot derive an SEC filing-detail URL from {url!r}; "
                         "provide filing_date_column instead."
                     )
-                filing_date = parse_filing_date(client.get_text(index_url))
+                details = parse_filing_details(client.get_text(index_url))
+                filing_date = details["filing_date"]
+                period_end = details["period_end"]
                 if not filing_date:
                     raise FilingParseError(
                         f"Could not extract Filing Date from {index_url!r}"
                     )
 
             html = client.get_text(url)
-            rows.append(parse_filing_html(html, filing_date=filing_date))
+            ticker = None
+            if ticker_column and pd.notna(input_row[ticker_column]):
+                ticker = str(input_row[ticker_column])
+            input_form_type = None
+            if form_type_column and pd.notna(input_row[form_type_column]):
+                input_form_type = str(input_row[form_type_column])
+            rows.append(
+                parse_filing_html(
+                    html,
+                    filing_date=filing_date,
+                    period_end=period_end,
+                    ticker=ticker,
+                    form_type=input_form_type,
+                )
+            )
 
     output = Path(output_path).expanduser().resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -675,22 +754,114 @@ def read_filings_parquet(path: Union[str, Path]) -> List[Dict[str, object]]:
     return pq.read_table(path).to_pylist()
 
 
+DEFAULT_INPUT_PATH = Path(__file__).resolve().with_name("url_links.csv")
+DEFAULT_OUTPUT_PATH = Path(__file__).resolve().with_name(
+    "sec_corpus_filings.parquet"
+)
+
+
+def _build_argument_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Convert SEC 10-K/10-Q filing URLs to a Parquet corpus."
+    )
+    parser.add_argument(
+        "--input",
+        type=Path,
+        default=DEFAULT_INPUT_PATH,
+        help=f"Input CSV (default: {DEFAULT_INPUT_PATH})",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=DEFAULT_OUTPUT_PATH,
+        help=f"Output Parquet file (default: {DEFAULT_OUTPUT_PATH})",
+    )
+    parser.add_argument(
+        "--url-column",
+        default="Link",
+        help="CSV column containing SEC document URLs (default: Link)",
+    )
+    parser.add_argument(
+        "--filing-date-column",
+        default=None,
+        help="Optional CSV column containing authoritative filing dates",
+    )
+    parser.add_argument(
+        "--ticker-column",
+        default="Ticker",
+        help="Optional CSV ticker fallback column (default: Ticker)",
+    )
+    parser.add_argument(
+        "--form-type-column",
+        default="Type",
+        help="Optional CSV form-type fallback column (default: Type)",
+    )
+    parser.add_argument(
+        "--user-agent",
+        default=os.environ.get("SEC_USER_AGENT"),
+        help=(
+            "SEC identity with contact email. Alternatively set "
+            "SEC_USER_AGENT."
+        ),
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Process only the first N rows (useful for a smoke test)",
+    )
+    return parser
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    """Command-line entry point. Importing this module performs no downloads."""
+
+    parser = _build_argument_parser()
+    args = parser.parse_args(argv)
+    if not args.user_agent:
+        parser.error(
+            "provide --user-agent 'Your Name you@example.com' or set "
+            "SEC_USER_AGENT"
+        )
+    if args.limit is not None and args.limit < 1:
+        parser.error("--limit must be at least 1")
+    if not args.input.is_file():
+        parser.error(f"input CSV does not exist: {args.input}")
+
+    filings = pd.read_csv(args.input)
+    if args.limit is not None:
+        filings = filings.head(args.limit)
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    ticker_column = args.ticker_column if args.ticker_column in filings.columns else None
+    form_type_column = (
+        args.form_type_column if args.form_type_column in filings.columns else None
+    )
+    output = filings_to_parquet(
+        filings,
+        args.output,
+        url_column=args.url_column,
+        user_agent=args.user_agent,
+        filing_date_column=args.filing_date_column,
+        ticker_column=ticker_column,
+        form_type_column=form_type_column,
+    )
+    LOGGER.info("Wrote %d filings to %s", len(filings), output)
+    return 0
+
+
 __all__ = [
     "FilingParseError",
     "SecClient",
     "filing_index_url",
     "filings_to_parquet",
     "parse_filing_date",
+    "parse_filing_details",
     "parse_filing_html",
     "read_filings_parquet",
+    "main",
 ]
 
-# Read the document with the urls
-filings_urls = pd.read_csv("url_links.csv")
-filings_urls.rename(columns={'Link':'url'},inplace=True)
 
-output = filings_to_parquet(
-    filings_urls[['url']],
-    "sec_corpus_filings.parquet",
-    user_agent="User_test user@example.com",
-)
+if __name__ == "__main__":
+    raise SystemExit(main())
