@@ -1,0 +1,23 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    
+
+
+    {
+      "name": "Run SEC filings ingestion",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/data/sec_filings_ingestion.py",
+      "console": "integratedTerminal",
+      "args": [
+        "--input",
+        "${workspaceFolder}/data/url_links.csv",
+        "--output",
+        "${workspaceFolder}/data/files/sec_corpus_filings.parquet",
+        "--user-agent",
+        "David Forero david.forero@email.com"
+      ]
+    }
+  ]
+}

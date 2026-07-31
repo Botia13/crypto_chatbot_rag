@@ -820,7 +820,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parser.parse_args(argv)
     if not args.user_agent:
         parser.error(
-            "provide --user-agent 'Your Name you@example.com' or set "
+            "provide --user-agent 'User user@example.com' or set "
             "SEC_USER_AGENT"
         )
     if args.limit is not None and args.limit < 1:
