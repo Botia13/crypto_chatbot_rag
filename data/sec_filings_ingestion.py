@@ -21,7 +21,8 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import requests
-from bs4 import BeautifulSoup, NavigableString, Tag, XMLParsedAsHTMLWarning
+from bs4 import BeautifulSoup, Tag, XMLParsedAsHTMLWarning
+from bs4.element import NavigableString
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -683,3 +684,13 @@ __all__ = [
     "parse_filing_html",
     "read_filings_parquet",
 ]
+
+# Read the document with the urls
+filings_urls = pd.read_csv("url_links.csv")
+filings_urls.rename(columns={'Link':'url'},inplace=True)
+
+output = filings_to_parquet(
+    filings_urls[['url']],
+    "sec_corpus_filings.parquet",
+    user_agent="User_test user@example.com",
+)
