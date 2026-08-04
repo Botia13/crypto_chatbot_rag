@@ -1,0 +1,12 @@
+[project]
+name = "crypto-chatbot-rag"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "beautifulsoup4>=4.12,<5",
+    "lxml>=5,<7",
+    "pandas>=2.0,<3",
+    "pyarrow>=15,<22",
+    "python-dotenv>=1.2.2",
+    "requests>=2.31,<3",
+]
