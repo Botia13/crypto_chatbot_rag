@@ -14,7 +14,7 @@
         "--input",
         "${workspaceFolder}/data/url_links.csv",
         "--output",
-        "${workspaceFolder}/data/files/sec_corpus_filings.parquet",
+        "${workspaceFolder}/data/files/sec_corpus_filings_new.parquet",
         "--user-agent",
         "David Forero david.forero@email.com"
       ]

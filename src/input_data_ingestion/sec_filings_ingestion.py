@@ -1,9 +1,9 @@
 """Download SEC 10-K/10-Q HTML filings and store cleaned sections in Parquet.
 
 The Parquet ``sections`` column uses Arrow's native
-``list<struct<id: string, title: string, text: string>>`` type. This is a good
-fit for downstream chunking and also permits 10-Q item IDs to repeat across
-Part I and Part II.
+``list<struct<...>>`` type. Each section keeps retrieval-ready text plus any
+tables as rows and Markdown. Structured tables avoid losing the relationship
+between financial labels, periods, units, and values during HTML cleaning.
 """
 
 from __future__ import annotations
@@ -53,6 +53,7 @@ _PART_HEADING_RE = re.compile(
 )
 _SIGNATURE_RE = re.compile(r"(?im)^\s*signatures?\s*$")
 _MARKER_RE = re.compile(r"\[\[SEC_ANCHOR_(\d+)\]\]")
+_TABLE_MARKER_RE = re.compile(r"\[\[SEC_TABLE_(\d+)\]\]")
 _SEC_ARCHIVE_RE = re.compile(
     r"^(?P<prefix>.*/Archives/edgar/data/\d+)/(?P<accession>\d{18})/[^/]+$",
     re.IGNORECASE,
@@ -270,7 +271,151 @@ def _remove_non_content(soup: BeautifulSoup) -> None:
             tag.decompose()
 
 
-def _render_document(soup: BeautifulSoup) -> Tuple[str, Dict[int, str]]:
+def _positive_span(value: object) -> int:
+    """Return a valid HTML row/column span, defaulting malformed values to 1."""
+
+    try:
+        return max(1, int(str(value)))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _table_rows(table: Tag) -> List[List[str]]:
+    """Extract a rectangular approximation of an HTML table.
+
+    SEC tables commonly use ``colspan`` for grouped period headers and nested
+    ``div`` elements inside cells. Reading each cell independently before the
+    document is flattened preserves row boundaries and numeric associations.
+    ``rowspan`` values are repeated into subsequent rows; ``colspan`` adds
+    empty placeholders so later cells remain in the correct column.
+    """
+
+    rows: List[List[str]] = []
+    pending: Dict[int, Tuple[int, str]] = {}
+    table_rows = [
+        row for row in table.find_all("tr")
+        if row.find_parent("table") is table
+    ]
+    for row in table_rows:
+        output: List[str] = []
+        column = 0
+
+        def consume_pending() -> None:
+            nonlocal column
+            while column in pending:
+                remaining, value = pending[column]
+                output.append(value)
+                if remaining <= 1:
+                    del pending[column]
+                else:
+                    pending[column] = (remaining - 1, value)
+                column += 1
+
+        consume_pending()
+        cells = [
+            cell for cell in row.find_all(["td", "th"], recursive=False)
+            if cell.find_parent("table") is table
+        ]
+        if not cells:
+            cells = [
+                cell for cell in row.find_all(["td", "th"])
+                if cell.find_parent("table") is table
+            ]
+        for cell in cells:
+            consume_pending()
+            value = _clean_inline(cell.get_text(" ", strip=True))
+            colspan = _positive_span(cell.get("colspan", 1))
+            rowspan = _positive_span(cell.get("rowspan", 1))
+            output.append(value)
+            if rowspan > 1:
+                pending[column] = (rowspan - 1, value)
+            column += 1
+            for _ in range(1, colspan):
+                output.append("")
+                if rowspan > 1:
+                    pending[column] = (rowspan - 1, "")
+                column += 1
+        consume_pending()
+        if output and any(output):
+            rows.append(output)
+
+    while pending:
+        output = []
+        last_column = max(pending)
+        for column in range(last_column + 1):
+            if column not in pending:
+                output.append("")
+                continue
+            remaining, value = pending[column]
+            output.append(value)
+            if remaining <= 1:
+                del pending[column]
+            else:
+                pending[column] = (remaining - 1, value)
+        if output and any(output):
+            rows.append(output)
+    if not rows:
+        return rows
+    last_content_column = max(
+        index
+        for row in rows
+        for index, value in enumerate(row)
+        if value
+    )
+    return [
+        row[:last_content_column + 1]
+        + [""] * max(0, last_content_column + 1 - len(row))
+        for row in rows
+    ]
+
+
+def _rows_to_markdown(rows: Sequence[Sequence[str]]) -> str:
+    """Render table rows as compact pipe-delimited text for embedding."""
+
+    rendered = []
+    for row in rows:
+        cells = [
+            _clean_inline(str(cell)).replace("|", "\\|")
+            for cell in row
+        ]
+        if cells and any(cells):
+            rendered.append(" | ".join(cells))
+    return "\n".join(rendered)
+
+
+def _extract_and_replace_tables(soup: BeautifulSoup) -> Dict[int, Dict[str, object]]:
+    """Replace semantic tables with stable text markers and Markdown."""
+
+    tables: Dict[int, Dict[str, object]] = {}
+    table_number = 0
+    # Innermost tables are handled first. If an outer layout table contains a
+    # rendered child-table marker, preserve its text but do not register a
+    # duplicate table.
+    for table in reversed(soup.find_all("table")):
+        if table.parent is None:
+            continue
+        rows = _table_rows(table)
+        markdown = _rows_to_markdown(rows)
+        if not markdown:
+            table.decompose()
+            continue
+        if _TABLE_MARKER_RE.search(markdown):
+            table.replace_with(NavigableString(f"\n{markdown}\n"))
+            continue
+        marker = f"[[SEC_TABLE_{table_number}]]"
+        tables[table_number] = {
+            "table_id": f"table-{table_number + 1:04d}",
+            "markdown": markdown,
+            "rows": rows,
+        }
+        table.replace_with(NavigableString(f"\n{marker}\n{markdown}\n"))
+        table_number += 1
+    return tables
+
+
+def _render_document(
+    soup: BeautifulSoup,
+) -> Tuple[str, Dict[int, str], Dict[int, Dict[str, object]]]:
     targets = _target_ids(soup)
     marker_ids: Dict[int, str] = {}
     seen_tags = set()
@@ -295,13 +440,10 @@ def _render_document(soup: BeautifulSoup) -> Tuple[str, Dict[int, str]]:
         marker_number += 1
 
     _remove_non_content(soup)
+    tables = _extract_and_replace_tables(soup)
 
     for br in soup.find_all("br"):
         br.replace_with(NavigableString("\n"))
-    for cell in soup.find_all(["td", "th"]):
-        cell.append(NavigableString(" | "))
-    for row in soup.find_all("tr"):
-        row.append(NavigableString("\n"))
     for block in soup.find_all(
         ["p", "div", "li", "ul", "ol", "h1", "h2", "h3", "h4", "h5", "h6"]
     ):
@@ -313,7 +455,7 @@ def _render_document(soup: BeautifulSoup) -> Tuple[str, Dict[int, str]]:
     text = re.sub(r"[\t\f\v ]+", " ", text)
     text = re.sub(r" *\n *", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
-    return text, marker_ids
+    return text, marker_ids, tables
 
 
 def _part_at(text: str, position: int) -> Optional[str]:
@@ -427,20 +569,21 @@ def _section_key(candidate: _Candidate, form_type: str) -> Optional[str]:
 
 def _clean_section(text: str) -> str:
     text = _MARKER_RE.sub("", text)
+    text = _TABLE_MARKER_RE.sub("", text)
     lines = []
-    previous = None
     for raw_line in text.splitlines():
-        line = _clean_inline(raw_line).strip("|").strip()
-        if not line or re.fullmatch(r"\d{1,3}", line) or line == "* * *":
-            continue
-        if line == previous:
+        line = _clean_inline(raw_line).strip()
+        if not line or line == "* * *":
             continue
         lines.append(line)
-        previous = line
     return "\n".join(lines).strip()
 
 
-def _extract_sections(text: str, form_type: str) -> List[Dict[str, str]]:
+def _extract_sections(
+    text: str,
+    form_type: str,
+    tables: Optional[Mapping[int, Dict[str, object]]] = None,
+) -> List[Dict[str, object]]:
     candidates = _find_candidates(text, form_type)
     if not candidates:
         raise FilingParseError("No SEC item headings were found in the filing HTML.")
@@ -449,7 +592,10 @@ def _extract_sections(text: str, form_type: str) -> List[Dict[str, str]]:
     structural_ends.extend(match.start() for match in _SIGNATURE_RE.finditer(text))
     structural_ends.sort()
 
-    choices: Dict[str, Tuple[int, bool, str, str, str]] = {}
+    choices: Dict[
+        str,
+        Tuple[int, bool, str, Optional[str], str, str, List[Dict[str, object]]],
+    ] = {}
     for index, candidate in enumerate(candidates):
         key = _section_key(candidate, form_type)
         if key is None:
@@ -459,7 +605,15 @@ def _extract_sections(text: str, form_type: str) -> List[Dict[str, str]]:
             if candidate.start < boundary < end:
                 end = boundary
                 break
-        section = _clean_section(text[candidate.start:end])
+        raw_section = text[candidate.start:end]
+        section_tables = [
+            dict(tables[number])
+            for number in dict.fromkeys(
+                int(match.group(1)) for match in _TABLE_MARKER_RE.finditer(raw_section)
+            )
+            if tables and number in tables
+        ]
+        section = _clean_section(raw_section)
         section_lines = section.splitlines()
         if section_lines and _ITEM_HEADING_RE.match(section_lines[0]):
             section = "\n".join(section_lines[1:]).strip()
@@ -478,8 +632,10 @@ def _extract_sections(text: str, form_type: str) -> List[Dict[str, str]]:
                 score,
                 candidate.anchored,
                 candidate.item,
+                candidate.part,
                 title,
                 section,
+                section_tables,
             )
 
     order: List[str]
@@ -494,8 +650,10 @@ def _extract_sections(text: str, form_type: str) -> List[Dict[str, str]]:
     sections = [
         {
             "id": choices[key][2],
-            "title": choices[key][3],
-            "text": choices[key][4],
+            "part": choices[key][3],
+            "title": choices[key][4],
+            "text": choices[key][5],
+            "tables": choices[key][6],
         }
         for key in order
         if key in choices
@@ -512,6 +670,7 @@ def parse_filing_html(
     period_end: Optional[str] = None,
     ticker: Optional[str] = None,
     form_type: Optional[str] = None,
+    source_url: Optional[str] = None,
 ) -> Dict[str, object]:
     """Parse one SEC filing HTML document into the requested row schema.
 
@@ -543,14 +702,29 @@ def parse_filing_html(
     if missing:
         raise FilingParseError(f"Missing required filing metadata: {missing}")
 
-    text, _ = _render_document(soup)
-    sections = _extract_sections(text, parsed_form_type)
+    text, _, tables = _render_document(soup)
+    sections = _extract_sections(text, parsed_form_type, tables)
+    accession_number: Optional[str] = None
+    cik: Optional[str] = None
+    if source_url:
+        parsed_url = urlparse(source_url)
+        archive_match = _SEC_ARCHIVE_RE.match(parsed_url.path)
+        if archive_match:
+            accession = archive_match.group("accession")
+            accession_number = (
+                f"{accession[:10]}-{accession[10:12]}-{accession[12:]}"
+            )
+            cik_match = re.search(r"/data/(\d+)", archive_match.group("prefix"), re.I)
+            cik = cik_match.group(1) if cik_match else None
     return {
         "company_name": metadata["company_name"],
         "ticker": metadata["ticker"],
         "form_type": parsed_form_type,
         "filing_date": _iso_date(filing_date),
         "period_end": metadata["period_end"],
+        "source_url": source_url,
+        "accession_number": accession_number,
+        "cik": cik,
         "sections": sections,
     }
 
@@ -611,14 +785,35 @@ def _arrow_schema() -> pa.Schema:
             pa.field("form_type", pa.string(), nullable=False),
             pa.field("filing_date", pa.string(), nullable=True),
             pa.field("period_end", pa.string(), nullable=False),
+            pa.field("source_url", pa.string(), nullable=True),
+            pa.field("accession_number", pa.string(), nullable=True),
+            pa.field("cik", pa.string(), nullable=True),
             pa.field(
                 "sections",
                 pa.list_(
                     pa.struct(
                         [
                             pa.field("id", pa.string(), nullable=False),
+                            pa.field("part", pa.string(), nullable=True),
                             pa.field("title", pa.string(), nullable=False),
                             pa.field("text", pa.string(), nullable=False),
+                            pa.field(
+                                "tables",
+                                pa.list_(
+                                    pa.struct(
+                                        [
+                                            pa.field("table_id", pa.string(), nullable=False),
+                                            pa.field("markdown", pa.string(), nullable=False),
+                                            pa.field(
+                                                "rows",
+                                                pa.list_(pa.list_(pa.string())),
+                                                nullable=False,
+                                            ),
+                                        ]
+                                    )
+                                ),
+                                nullable=False,
+                            ),
                         ]
                     )
                 ),
@@ -738,6 +933,7 @@ def filings_to_parquet(
                     period_end=period_end,
                     ticker=ticker,
                     form_type=input_form_type,
+                    source_url=url,
                 )
             )
 

@@ -36,8 +36,12 @@ python data/sec_filings_ingestion.py \
 You may use the `SEC_USER_AGENT` environment variable instead of passing the
 command-line option.
 
-The Parquet `sections` field has the native Arrow type
-`list<struct<id: string, title: string, text: string>>`.
+Each Parquet row includes SEC provenance (`source_url`, `accession_number`, and
+`cik`). The nested `sections` field keeps `part`, `id`, `title`, and
+retrieval-ready `text`. It also contains structured `tables`, where every table
+stores its original rows plus a pipe-delimited Markdown representation. This
+prevents financial labels, reporting periods, units, and values from being
+flattened into unrelated lines.
 
 Run the regression tests with:
 
