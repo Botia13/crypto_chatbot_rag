@@ -53,7 +53,13 @@ _PART_HEADING_RE = re.compile(
 )
 _SIGNATURE_RE = re.compile(r"(?im)^\s*signatures?\s*$")
 _MARKER_RE = re.compile(r"\[\[SEC_ANCHOR_(\d+)\]\]")
-_TABLE_MARKER_RE = re.compile(r"\[\[SEC_TABLE_(\d+)\]\]")
+_TABLE_MARKER_RE = re.compile(r"\[\[SEC_TABLE_START_(\d+)\]\]")
+_TABLE_BLOCK_RE = re.compile(
+    r"\[\[SEC_TABLE_START_(?P<number>\d+)\]\]"
+    r".*?"
+    r"\[\[SEC_TABLE_END_(?P=number)\]\]",
+    re.DOTALL,
+)
 _SEC_ARCHIVE_RE = re.compile(
     r"^(?P<prefix>.*/Archives/edgar/data/\d+)/(?P<accession>\d{18})/[^/]+$",
     re.IGNORECASE,
@@ -384,7 +390,13 @@ def _rows_to_markdown(rows: Sequence[Sequence[str]]) -> str:
 
 
 def _extract_and_replace_tables(soup: BeautifulSoup) -> Dict[int, Dict[str, object]]:
-    """Replace semantic tables with stable text markers and Markdown."""
+    """Extract tables while keeping temporary boundaries for section parsing.
+
+    The rendered Markdown remains between internal markers long enough for SEC
+    item headings inside HTML layout tables to be detected. During final section
+    cleaning, each complete block becomes one public ``[[TABLE:table-xxxx]]``
+    reference; the table content remains only in the structured ``tables`` field.
+    """
 
     tables: Dict[int, Dict[str, object]] = {}
     table_number = 0
@@ -402,13 +414,19 @@ def _extract_and_replace_tables(soup: BeautifulSoup) -> Dict[int, Dict[str, obje
         if _TABLE_MARKER_RE.search(markdown):
             table.replace_with(NavigableString(f"\n{markdown}\n"))
             continue
-        marker = f"[[SEC_TABLE_{table_number}]]"
+        table_id = f"table-{table_number + 1:04d}"
+        start_marker = f"[[SEC_TABLE_START_{table_number}]]"
+        end_marker = f"[[SEC_TABLE_END_{table_number}]]"
         tables[table_number] = {
-            "table_id": f"table-{table_number + 1:04d}",
+            "table_id": table_id,
             "markdown": markdown,
             "rows": rows,
         }
-        table.replace_with(NavigableString(f"\n{marker}\n{markdown}\n"))
+        table.replace_with(
+            NavigableString(
+                f"\n{start_marker}\n{markdown}\n{end_marker}\n"
+            )
+        )
         table_number += 1
     return tables
 
@@ -567,9 +585,22 @@ def _section_key(candidate: _Candidate, form_type: str) -> Optional[str]:
     return f"{candidate.part} Item {candidate.item}"
 
 
-def _clean_section(text: str) -> str:
+def _clean_section(
+    text: str,
+    tables: Optional[Mapping[int, Dict[str, object]]] = None,
+) -> str:
     text = _MARKER_RE.sub("", text)
-    text = _TABLE_MARKER_RE.sub("", text)
+
+    def replace_table_block(match: re.Match[str]) -> str:
+        number = int(match.group("number"))
+        if not tables or number not in tables:
+            raise FilingParseError(
+                f"Table marker {number} has no matching structured table."
+            )
+        table_id = str(tables[number]["table_id"])
+        return f"[[TABLE:{table_id}]]"
+
+    text = _TABLE_BLOCK_RE.sub(replace_table_block, text)
     lines = []
     for raw_line in text.splitlines():
         line = _clean_inline(raw_line).strip()
@@ -613,7 +644,7 @@ def _extract_sections(
             )
             if tables and number in tables
         ]
-        section = _clean_section(raw_section)
+        section = _clean_section(raw_section, tables)
         section_lines = section.splitlines()
         if section_lines and _ITEM_HEADING_RE.match(section_lines[0]):
             section = "\n".join(section_lines[1:]).strip()
@@ -624,7 +655,7 @@ def _extract_sections(
 
         # TOC entries and cross-references are usually much shorter than the
         # real item. Prefer anchored candidates, then the longest candidate.
-        score = len(section) + (10_000_000 if candidate.anchored else 0)
+        score = len(raw_section) + (10_000_000 if candidate.anchored else 0)
         existing = choices.get(key)
         if existing is None or score > existing[0]:
             title = _clean_inline(candidate.title).strip(" .|:-")

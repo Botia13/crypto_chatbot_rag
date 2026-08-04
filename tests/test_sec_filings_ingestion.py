@@ -6,7 +6,7 @@ from bs4 import BeautifulSoup
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "data"))
+sys.path.insert(0, str(PROJECT_ROOT / "src" / "input_data_ingestion"))
 
 import sec_filings_ingestion as ingestion  # noqa: E402
 
@@ -39,9 +39,8 @@ def test_financial_table_preserves_rows_columns_spans_and_repeated_values():
     financials = sections[0]
     assert financials["id"] == "8"
     assert financials["part"] is None
-    assert "Net asset value | $ 53.09 | $ 25.00" in financials["text"]
-    assert "Zero values | 0 | 0" in financials["text"]
-    assert "Integer values | 25 | 100" in financials["text"]
+    assert financials["text"] == "[[TABLE:table-0001]]"
+    assert "Net asset value | $ 53.09 | $ 25.00" not in financials["text"]
     assert financials["tables"][0]["rows"] == [
         ["Metric", "December 31", ""],
         ["Metric", "2024", "2023"],
