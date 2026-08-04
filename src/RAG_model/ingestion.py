@@ -1,4 +1,15 @@
 from dotenv import load_dotenv
+from pathlib import Path
+from langchain.chat_models import ChatOpenAI
+from langchain.embeddings.openai import OpenAIEmbeddings
 
 
-load_dotenv()  # Load environment variables from .env file
+# Load environment variables from .env file
+load_dotenv() 
+
+# Define constants for the model and database name
+MODEL = "gpt-4.1-nano"
+DB_NAME = str(Path(__file__).parent.parent / "data" / "vector_db")
+
+# Initialize the OpenAI embeddings model
+embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
