@@ -1,7 +1,7 @@
 from dotenv import load_dotenv
 from pathlib import Path
-from langchain.chat_models import ChatOpenAI
-from langchain.embeddings.openai import OpenAIEmbeddings
+from langchain_openai import ChatOpenAI
+from langchain_openai import OpenAIEmbeddings
 
 
 # Load environment variables from .env file
@@ -13,3 +13,6 @@ DB_NAME = str(Path(__file__).parent.parent / "data" / "vector_db")
 
 # Initialize the OpenAI embeddings model
 embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
+
+
+print("Done")
