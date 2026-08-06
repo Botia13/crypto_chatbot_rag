@@ -2,3 +2,10 @@
 __pycache__/
 *.pyc
 .venv/
+
+# Generated local data
+data/qdrant_storage/
+data/parquet_files/
+
+# Jupyter
+.ipynb_checkpoints/

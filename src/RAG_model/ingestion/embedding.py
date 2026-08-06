@@ -1,10 +1,24 @@
+import os 
 from openai import OpenAI
-from config import EMBEDDINGS_MODEL, PIPELINE_VERSION
+from config import EMBEDDINGS_BATCH_SIZE, EMBEDDINGS_MODEL, OPENROUTER_BASE_URL, PIPELINE_VERSION
 
 
+# Create a small client factory 
+def create_openrouter_client():
+    
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    
+    if not api_key:
+        raise ValueError("There is no Oen Router Key configured.")
+    
+    return OpenAI(api_key = api_key,
+                  base_url= OPENROUTER_BASE_URL,
+                  max_retries=8,
+                  timeout=60.0)
+    
 
 
-def create_embeddings(chunks, model = EMBEDDINGS_MODEL, batch_size = 100, openai_client=None):
+def create_embeddings(chunks, model = EMBEDDINGS_MODEL, batch_size = EMBEDDINGS_BATCH_SIZE, embedding_client=None):
     
     """Create embeddings for a list of text chunks using the specified model and batch size."""
     
@@ -14,8 +28,8 @@ def create_embeddings(chunks, model = EMBEDDINGS_MODEL, batch_size = 100, openai
     if not chunks:
         raise ValueError("The input 'chunks' list is empty. Please provide valid chunk data.")
     
-    if openai_client is None:
-        openai_client = OpenAI()
+    if embedding_client is None:
+        embedding_client = create_openrouter_client()
     
     # Divide the chunks into batches to avoid hitting API limits 
     for start in range(0, len(chunks), batch_size):
@@ -30,7 +44,7 @@ def create_embeddings(chunks, model = EMBEDDINGS_MODEL, batch_size = 100, openai
             raise ValueError("One or more chunks have empty text. Please check the input data.")
 
         # Create embeddings for the batch    
-        response = openai_client.embeddings.create(
+        response = embedding_client.embeddings.create(
             model = model,
             input = texts
         )   

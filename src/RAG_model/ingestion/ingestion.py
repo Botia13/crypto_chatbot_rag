@@ -15,7 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 ## Input name with the csv that has the SEC html links as CSV
 SEC_INPUT_NAME = (PROJECT_ROOT / "data" / "url_links.csv")
 ## Output Name for the parquet file that has the SEC docs.
-SEC_OUTPUT_NAME =  (PROJECT_ROOT / "data" / "parquet_files" / f"sec_corpus_filings_{PIPELINE_VERSION}.parquet")
+SEC_OUTPUT_NAME =  (PROJECT_ROOT / "data" / "parquet_files" / f"sec_corpus_filings_v1.parquet")
 ## Path for the QDRANT STORAGE
 DB_PATH_NAME = (PROJECT_ROOT /"data"/ "qdrant_storage")
 
@@ -56,16 +56,22 @@ def ingestion ():
     if SEC_OUTPUT_NAME.exists():
         print("Parquet file already exists.")
     else:
+        print("Starting to create the parquet file.")
         ingest_html_sec()
         
+    print("SEC html ingestion Complete")
     corpus = pd.read_parquet(SEC_OUTPUT_NAME)
     
     # Chunk the corpus
     chunks = get_chunks_from_corpus(corpus)
+    print("Chunking step Complete")
+    
     #Embedd the chunks
     embeddings = create_embeddings(chunks)
+    print("Embedding Step Complete")
     
     #Save the embeddings in Qdrant
+    print("Starting to create the Qdrant database.")
     qdrant_client = QdrantClient(path = str(DB_PATH_NAME))
     create_qdrant_collection(qdrant_client=qdrant_client,vector_size=embeddings['embedding_dimensions'])
     store_embeddings(qdrant_client=qdrant_client, embedded_chunks=embeddings['embedded_chunks'])
