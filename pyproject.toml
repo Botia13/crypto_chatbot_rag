@@ -25,3 +25,10 @@ link-mode = "copy"
 dev = [
     "pytest>=9.1.1",
 ]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/RAG_model"]

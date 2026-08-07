@@ -4,7 +4,7 @@ PIPELINE_VERSION = "v1_2"
 # The model to use to generate the answers
 
 GENERATION_MODEL = "openai/gpt-4o-mini"
-
+RETRIEVAL_K = 5
 
 # Chunking configuration
 CHUNK_SIZE = 500
@@ -28,7 +28,6 @@ COLLECTION_NAME = (
 
 # SEC html ingestion config
 from pathlib import Path
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 ## Input name with the csv that has the SEC html links as CSV
