@@ -1,23 +1,14 @@
 import os
 import pandas as pd
-from pathlib import Path
 from sec_filings_ingestion import filings_to_parquet
-from chunking import get_chunks_from_corpus
-from embedding import create_embeddings
-from vector_database import store_embeddings, create_qdrant_collection
+from .chunking import get_chunks_from_corpus
+from .embedding import create_embeddings
+from .vector_database import store_embeddings, create_qdrant_collection
 from qdrant_client import QdrantClient
 from dotenv import load_dotenv
-from config import  PIPELINE_VERSION
+from .config import  PROJECT_ROOT, SEC_INPUT_NAME, SEC_OUTPUT_NAME, DB_PATH_NAME
 
-#Constants
-## Workspace of the files 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-## Input name with the csv that has the SEC html links as CSV
-SEC_INPUT_NAME = (PROJECT_ROOT / "data" / "url_links.csv")
-## Output Name for the parquet file that has the SEC docs.
-SEC_OUTPUT_NAME =  (PROJECT_ROOT / "data" / "parquet_files" / f"sec_corpus_filings_v1.parquet")
-## Path for the QDRANT STORAGE
-DB_PATH_NAME = (PROJECT_ROOT /"data"/ "qdrant_storage")
+
 
 
 # Ingest the SEC HTML to parquet files 

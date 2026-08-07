@@ -1,7 +1,6 @@
 import os 
 from openai import OpenAI
-from config import EMBEDDINGS_BATCH_SIZE, EMBEDDINGS_MODEL, OPENROUTER_BASE_URL, PIPELINE_VERSION
-
+from .config import EMBEDDINGS_BATCH_SIZE, EMBEDDINGS_MODEL, OPENROUTER_BASE_URL, PIPELINE_VERSION
 
 # Create a small client factory 
 def create_openrouter_client():
@@ -9,7 +8,7 @@ def create_openrouter_client():
     api_key = os.getenv("OPENROUTER_API_KEY")
     
     if not api_key:
-        raise ValueError("There is no Oen Router Key configured.")
+        raise ValueError("There is no Open Router Key configured.")
     
     return OpenAI(api_key = api_key,
                   base_url= OPENROUTER_BASE_URL,
