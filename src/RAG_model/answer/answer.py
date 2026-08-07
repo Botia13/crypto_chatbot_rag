@@ -1,54 +1,38 @@
+import re
 from RAG_model.ingestion.config import EMBEDDINGS_MODEL, COLLECTION_NAME, DB_PATH_NAME, GENERATION_MODEL, RETRIEVAL_K
 from RAG_model.ingestion.embedding import create_openrouter_client
 from qdrant_client import QdrantClient
-from tenacity import retry, wait_exponential, stop_after_attempt
 from time import perf_counter
 from pathlib import Path
 from dotenv import load_dotenv
 
-wait = wait_exponential(multiplier=1, min=10, max=240)
-
-qdrant_client = QdrantClient(path = str(DB_PATH_NAME))
-print("Qdrant client Open.")
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 load_dotenv(PROJECT_ROOT / ".env")
+
+
+qdrant_client = QdrantClient(path=str(DB_PATH_NAME))
+print("Qdrant client Open.")
+
 client = create_openrouter_client()
 
-def fetch_context(question, retrieval_k = RETRIEVAL_K):
-    """Embed a question and retrieve its top-k most similar chunks."""
-    
-    # Embedd the question with the same embedding model
-    query = client.embeddings.create(model = EMBEDDINGS_MODEL, input=[question]).data[0].embedding
-    
-    # Return results from the database based on the question
-    results = qdrant_client.query_points(
-        collection_name= COLLECTION_NAME,
-        query = query,
-        limit= retrieval_k,
-        with_payload= True)
-        
-    # Convert the payload to the right format 
-    
+def fetch_context(question: str, retrieval_k: int = RETRIEVAL_K) -> list[dict]:
+    query = client.embeddings.create(model=EMBEDDINGS_MODEL, input=[question]).data[0].embedding
+    results = qdrant_client.query_points(collection_name=COLLECTION_NAME, query=query, limit=retrieval_k, with_payload=True)
     chunks = []
-    
     for point in results.points:
         payload = point.payload or {}
-
-        chunks.append(
-            {
-                "chunk_id": payload["chunk_id"],
-                "chunk_text": payload["chunk_text"],
-                "ticker": payload["ticker"],
-                "filing_date": payload["filing_date"],
-                "section_title": payload["chunk_title"],
-                "source_url": payload["source_url"],
-                "score": point.score,
-            }
-        )
-
+        chunks.append({
+            "chunk_id": payload["chunk_id"],
+            "chunk_text": payload["chunk_text"],
+            "ticker": payload["ticker"],
+            "filing_date": payload["filing_date"],
+            "section_title": payload["chunk_title"],
+            "source_url": payload["source_url"],
+            "score": point.score
+        })
     return chunks
+
 
 def make_rag_messages(question, history, chunks):
     """Build chat messages for the RAG answer step: system (with context) + history + user question."""
@@ -61,29 +45,12 @@ def make_rag_messages(question, history, chunks):
             - SEC URL{chunk['source_url']}] \n \
             - Content: \n {chunk['chunk_text']}  " for chunk in chunks)
     
-    system_prompt = f"""
-    You are a knowledgeable, friendly assistant that helps with question regard some specific companies extracting only the information available from the SEC 10-K and 10-Q forms those companies submmit.
-    You are chatting with a user about Answer questions about these SEC filing entities: IBIT, ETHA, FBTC, FETH, GBTC, ETHE. If the question is outside this corpus, explain that the corpus does
-    not contain evidence to answer it.
-    Your answer will be evaluated for accuracy, relevance and completeness, so make sure it only answers the question and fully answers it.
-    Answer using only the supplied context.
+    system_prompt = f"""You answer only with information from supplied SEC 10-K and 10-Q filing extracts.
+        The corpus covers IBIT, ETHA, FBTC, FETH, GBTC, and ETHE. If the corpus does not contain enough information, say: "I could not find enough evidence in the retrieved SEC filings."
+        Answer using only the supplied context. Cite every factual claim using supplied IDs in this format: [SOURCE: source-id]. Never invent a source ID. Do not infer, calculate, or compare values unless the retrieved context contains all evidence needed.
 
-    If the context does not contain enough information, say:
-    "I could not find enough evidence in the retrieved SEC filings."
-
-    Cite the supplied source IDs for every factual claim using:
-    [SOURCE: chunk_id]
-
-    Never invent a source ID or cite a source that was not supplied.
-    
-    Do not infer, calculate, or compare values unless the retrieved context
-    contains all evidence needed. Otherwise say that there is not enough evidence.
-    
-    For context, here are specific extracts from the Knowledge Base that might be directly relevant to the user's question:
-    {context}
-
-    With this context, please answer the user's question. Be accurate, relevant and complete.
-    """
+        Context:
+        {context}"""
     
     return (
         [{"role": "system",
@@ -106,15 +73,13 @@ def format_answer(answer):
         "Answer": answer_text,
         "Similarity Scores": scores,
         "Retrieved Chunk texts": chunks,
-        "Citations": answer_text.split("SOURCE")[1][:-2],
+        "Citations": re.findall(r"\[SOURCE:\s*([^\]]+)\]", answer_text),
         "Latency": latency_ms
     }
     
        
    
-    
-@retry(wait=wait,
-       stop=stop_after_attempt(4))
+
 def answer(question: str, history:list[dict] | None = None):
     
     if history is None:
@@ -147,14 +112,26 @@ def answer(question: str, history:list[dict] | None = None):
         "total": (generation_end - total_start) * 1000,
     }
     
-    answer = question, answer_text, chunks, latency_ms
+    result = question, answer_text, chunks, latency_ms
     
-    final_answer = format_answer(answer)
+    final_answer = format_answer(result)
     
     return final_answer
-    
-client.close()
-qdrant_client.close()
-print("Qdrant client closed.")
 
-print("Done")
+def main() -> None:
+    question = input("Question: ").strip()
+    if not question:
+        raise SystemExit("A question is required.")
+    result = answer(question)
+    print("\nAnswer:\n", result["Answer"])
+
+    
+if __name__ == "__main__":
+    try:
+        main()
+    finally:
+        client.close()
+        qdrant_client.close()
+
+
+
