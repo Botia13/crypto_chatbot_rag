@@ -23,13 +23,18 @@ def fetch_context(question: str, retrieval_k: int = RETRIEVAL_K) -> list[dict]:
     for point in results.points:
         payload = point.payload or {}
         chunks.append({
-            "chunk_id": payload["chunk_id"],
-            "chunk_text": payload["chunk_text"],
-            "ticker": payload["ticker"],
-            "filing_date": payload["filing_date"],
-            "section_title": payload["chunk_title"],
-            "source_url": payload["source_url"],
-            "score": point.score
+            "chunk_id": payload.get("chunk_id"),
+            "chunk_text": payload.get("chunk_text"),
+            "ticker": payload.get("ticker"),
+            "filing_date": payload.get("filing_date"),
+            "section_title": payload.get("chunk_title"),
+            "source_url": payload.get("source_url"),
+            "score": point.score,
+            "section_type": payload.get("section_type", "item"),
+            "section_part": payload.get("section_part"),
+            "section_key": payload.get("section_key"),
+            "table_type": payload.get("table_type"),
+            "table_title": payload.get("table_title")
         })
     return chunks
 
@@ -37,13 +42,16 @@ def fetch_context(question: str, retrieval_k: int = RETRIEVAL_K) -> list[dict]:
 def make_rag_messages(question, history, chunks):
     """Build chat messages for the RAG answer step: system (with context) + history + user question."""
     context = "\n\n".join(
-        f"-Extract from:\n \
-           [SOURCE:{chunk['chunk_id']:}]\n \
-            - TICKER: {chunk['ticker']}\n \
-            - Section:{chunk['section_title']}\n \
-            - Filing Date:{chunk['filing_date']}\n \
-            - SEC URL{chunk['source_url']}] \n \
-            - Content: \n {chunk['chunk_text']}  " for chunk in chunks)
+        f"""[SOURCE: {chunk['chunk_id']}]
+    Ticker: {chunk['ticker']}
+    Section: {chunk['section_title']}
+    Section key: {chunk.get('section_key', 'N/A')}
+    Table: {chunk.get('table_title') or 'N/A'}
+    SEC URL: {chunk['source_url']}
+
+    Content:
+    {chunk['chunk_text']}"""
+        for chunk in chunks)
     
     system_prompt = f"""You answer only with information from supplied SEC 10-K and 10-Q filing extracts.
         The corpus covers IBIT, ETHA, FBTC, FETH, GBTC, and ETHE. If the corpus does not contain enough information, say: "I could not find enough evidence in the retrieved SEC filings."

@@ -1,6 +1,6 @@
 import os
 import pandas as pd
-from .sec_filings_ingestion import filings_to_parquet
+from sec_filings_ingestion import filings_to_parquet
 from .chunking import get_chunks_from_corpus
 from .embedding import create_embeddings
 from .vector_database import store_embeddings, create_qdrant_collection

@@ -1,5 +1,5 @@
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from .config import CHUNK_OVERLAP, CHUNK_SIZE, ENCODING_NAME, PIPELINE_VERSION
+from config import  CHUNK_OVERLAP, CHUNK_SIZE, ENCODING_NAME, PIPELINE_VERSION
 
 
 
@@ -27,17 +27,6 @@ def chunk_document(document):
     chunk_records = []
 
     for section in document["sections"]:
-        section_part = section.get("part")
-        if section_part:
-            section_key = (
-                f"{section_part.lower().replace(' ', '-')}"
-                f"-item-{section['id'].lower()}"
-            )
-        elif section.get("section_type", "item") == "item":
-            section_key = f"item-{section['id'].lower()}"
-        else:
-            section_key = section["id"].lower().replace("_", "-")
-
         # 1. Create narrative text chunks
         section_text = section.get("text", "").strip()
 
@@ -59,19 +48,14 @@ def chunk_document(document):
                         "source_url": document["source_url"],
                         "accession_number": document["accession_number"],
                         "section_id": section["id"],
-                        "section_part": section_part,
-                        "section_key": section_key,
-                        "section_type": section.get("section_type", "item"),
                         "chunk_title": section["title"],
                         "chunk_type": "text",
                         "chunk_version": PIPELINE_VERSION,
                         "table_id": None,
-                        "table_type": None,
-                        "table_title": None,
                         "chunk_index": chunk_index,
                         "chunk_id": (
                             f"{document['accession_number']}"
-                            f"*{section_key}"
+                            f"*section-{section['id']}"
                             f"*text-{chunk_index:04d}"
                         ),
                         "chunk_text": chunk_text_with_title,
@@ -81,17 +65,10 @@ def chunk_document(document):
         # 2. Create one separate chunk for each table
         for table in section.get("tables", []):
             table_id = table["table_id"]
-            table_title = table.get("table_title") or "Untitled table"
-            periods = ", ".join(table.get("periods", [])) or "Not detected"
-            units = table.get("units") or "Not stated"
             table_text = (
                 f"Section: {section['title']}\n"
                 f"Table ID: {table_id}\n\n"
-                f"Table title: {table_title}\n"
-                f"Table type: {table.get('table_type', 'data_table')}\n"
-                f"Periods: {periods}\n"
-                f"Units: {units}\n\n"
-                f"{table.get('embedding_text') or table['markdown']}"
+                f"{table['markdown']}"
             )
 
             chunk_records.append(
@@ -104,19 +81,13 @@ def chunk_document(document):
                     "source_url": document["source_url"],
                     "accession_number": document["accession_number"],
                     "section_id": section["id"],
-                    "section_part": section_part,
-                    "section_key": section_key,
-                    "section_type": section.get("section_type", "item"),
                     "chunk_title": section["title"],
                     "chunk_type": "table",
-                    "table_type": table.get("table_type", "data_table"),
-                    "table_title": table_title,
                     "table_id": table_id,
                     "chunk_index": 0,
-                    "chunk_version": PIPELINE_VERSION,
                     "chunk_id": (
                         f"{document['accession_number']}"
-                        f"*{section_key}"
+                        f"*section-{section['id']}"
                         f"*{table_id}"
                     ),
                     "chunk_text": table_text,

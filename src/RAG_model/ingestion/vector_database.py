@@ -1,6 +1,6 @@
 from qdrant_client.models import Distance, VectorParams, PointStruct
 from uuid import uuid5, NAMESPACE_URL
-from config import COLLECTION_NAME
+from .config import COLLECTION_NAME
 
 
 
@@ -61,9 +61,15 @@ def create_point(embedded_chunk):
         "period_end": str(embedded_chunk["period_end"]),
         "source_url": embedded_chunk["source_url"],
         "accession_number": embedded_chunk["accession_number"],
+        "section_type": embedded_chunk["section_type"],
+        "section_part": embedded_chunk["section_part"],
+        "section_key": embedded_chunk["section_key"],
+        "table_type": embedded_chunk["table_type"],
+        "table_title": embedded_chunk["table_title"],
+        "chunk_version": embedded_chunk["chunk_version"],
         "section_id": embedded_chunk["section_id"],
         "chunk_title": embedded_chunk["chunk_title"],
-        "chunk_type": embedded_chunk["chunk_type"],
+        "chunk_type": embedded_chunk["chunk_type"]
     }
     if embedded_chunk['table_id'] is not None:
         payload["table_id"] = embedded_chunk["table_id"]

@@ -51,13 +51,6 @@ _PART_HEADING_RE = re.compile(
     r"(?im)^\s*part\s+(?P<part>I{1,4})\b[^\n]*$"
 )
 _SIGNATURE_RE = re.compile(r"(?im)^\s*signatures?\s*$")
-_FINANCIAL_APPENDIX_RE = re.compile(
-    r"(?im)^\s*(?:index\s+to\s+financial\s+statements|"
-    r"financial\s+statements\s*\n\s*index)\s*$"
-)
-_GLOSSARY_RE = re.compile(
-    r"(?im)^\s*glossary\s+of\s+(?:defined\s+)?terms\s*$"
-)
 _MARKER_RE = re.compile(r"\[\[SEC_ANCHOR_(\d+)\]\]")
 _TABLE_MARKER_RE = re.compile(r"\[\[SEC_TABLE_START_(\d+)\]\]")
 _TABLE_BLOCK_RE = re.compile(
@@ -93,7 +86,7 @@ _TITLE_HINTS: Mapping[str, Mapping[str, Sequence[str]]] = {
         "11": ("executive compensation",),
         "12": ("security ownership",),
         "13": ("relationships", "related transactions"),
-        "14": ("accounting fees", "accountant fees"),
+        "14": ("accounting fees",),
         "15": ("exhibit", "financial statement schedules"),
         "16": ("10-k summary", "10‑k summary", "10k summary"),
     },
@@ -107,62 +100,6 @@ _TITLE_HINTS: Mapping[str, Mapping[str, Sequence[str]]] = {
         "6": ("exhibit",),
     },
 }
-
-_CANONICAL_TITLES: Mapping[str, Mapping[str, str]] = {
-    "10-K": {
-        "1": "Business",
-        "1A": "Risk Factors",
-        "1B": "Unresolved Staff Comments",
-        "1C": "Cybersecurity",
-        "2": "Properties",
-        "3": "Legal Proceedings",
-        "4": "Mine Safety Disclosures",
-        "5": (
-            "Market for Registrant's Common Equity, Related Stockholder "
-            "Matters and Issuer Purchases of Equity Securities"
-        ),
-        "6": "[Reserved]",
-        "7": "Management's Discussion and Analysis of Financial Condition and Results of Operations",
-        "7A": "Quantitative and Qualitative Disclosures About Market Risk",
-        "8": "Financial Statements and Supplementary Data",
-        "9": "Changes in and Disagreements with Accountants on Accounting and Financial Disclosure",
-        "9A": "Controls and Procedures",
-        "9B": "Other Information",
-        "9C": "Disclosure Regarding Foreign Jurisdictions that Prevent Inspections",
-        "10": "Directors, Executive Officers and Corporate Governance",
-        "11": "Executive Compensation",
-        "12": "Security Ownership of Certain Beneficial Owners and Management and Related Stockholder Matters",
-        "13": "Certain Relationships and Related Transactions, and Director Independence",
-        "14": "Principal Accountant Fees and Services",
-        "15": "Exhibits and Financial Statement Schedules",
-        "16": "Form 10-K Summary",
-    },
-    "10-Q": {
-        "1": "Financial Statements",
-        "1A": "Risk Factors",
-        "2": "Management's Discussion and Analysis of Financial Condition and Results of Operations",
-        "3": "Quantitative and Qualitative Disclosures About Market Risk",
-        "4": "Controls and Procedures",
-        "5": "Other Information",
-        "6": "Exhibits",
-    },
-}
-
-_BULLET_VALUES = {"•", "●", "▪", "◦", "‣", "–", "—"}
-_FINANCIAL_TABLE_HINT_RE = re.compile(
-    r"(?i)\b(?:statements?\s+of|schedules?\s+of\s+investments?|"
-    r"assets?\s+and\s+liabilit|cash\s+flows?|changes?\s+in\s+net\s+assets?|"
-    r"financial\s+highlights?)\b"
-)
-_PERIOD_RE = re.compile(
-    r"\b(?:January|February|March|April|May|June|July|August|September|"
-    r"October|November|December)\s+\d{1,2},\s+20\d{2}\b|\b20\d{2}\b",
-    re.IGNORECASE,
-)
-_UNITS_RE = re.compile(
-    r"(?i)\b(?:amounts?\s+(?:are\s+)?in\s+[^\n|]{1,80}|"
-    r"in\s+thousands(?:\s+of\s+[^\n|]{1,30})?)"
-)
 
 
 class FilingParseError(ValueError):
@@ -237,37 +174,6 @@ def _clean_inline(value: str) -> str:
     value = value.replace("\xa0", " ").replace("\u200b", "")
     value = re.sub(r"\s+", " ", value).strip()
     return re.sub(r"\s+([®™©])", r"\1", value)
-
-
-def _canonical_match_text(value: str) -> str:
-    """Normalize headings for matching across split inline HTML tags."""
-
-    return re.sub(r"[^0-9a-z]+", "", _clean_inline(value).casefold())
-
-
-def _canonical_section_title(
-    form_type: str,
-    item: str,
-    part: Optional[str],
-    fallback: str,
-) -> str:
-    """Return a stable SEC item title while respecting repeated 10-Q items."""
-
-    if form_type == "10-Q" and part == "Part II":
-        part_two_titles = {
-            "1": "Legal Proceedings",
-            "1A": "Risk Factors",
-            "2": "Unregistered Sales of Equity Securities and Use of Proceeds",
-            "3": "Defaults Upon Senior Securities",
-            "4": "Mine Safety Disclosures",
-            "5": "Other Information",
-            "6": "Exhibits",
-        }
-        return part_two_titles.get(item, _clean_inline(fallback))
-    return _CANONICAL_TITLES.get(form_type, {}).get(
-        item,
-        _clean_inline(fallback),
-    )
 
 
 def _xbrl_values(soup: BeautifulSoup, fact_name: str) -> List[str]:
@@ -469,7 +375,7 @@ def _table_rows(table: Tag) -> List[List[str]]:
 
 
 def _rows_to_markdown(rows: Sequence[Sequence[str]]) -> str:
-    """Render the rectangular table grid as pipe-delimited text."""
+    """Render table rows as compact pipe-delimited text for embedding."""
 
     rendered = []
     for row in rows:
@@ -482,161 +388,6 @@ def _rows_to_markdown(rows: Sequence[Sequence[str]]) -> str:
     return "\n".join(rendered)
 
 
-def _rows_to_embedding_text(rows: Sequence[Sequence[str]]) -> str:
-    """Render a compact version without empty HTML-layout placeholders."""
-
-    rendered: List[str] = []
-    for row in rows:
-        cells = [
-            _clean_inline(str(cell)).replace("|", "\\|")
-            for cell in row
-            if _clean_inline(str(cell))
-        ]
-        if cells:
-            rendered.append(" | ".join(cells))
-    return "\n".join(rendered)
-
-
-def _rows_to_narrative(rows: Sequence[Sequence[str]]) -> str:
-    """Flatten a presentational table without losing its visible wording."""
-
-    lines = []
-    for row in rows:
-        values = [_clean_inline(str(value)) for value in row if _clean_inline(str(value))]
-        if values:
-            lines.append(" ".join(values))
-    return "\n".join(lines)
-
-
-def _is_presentational_table(table: Tag, rows: Sequence[Sequence[str]]) -> bool:
-    """Identify layout, bullet-list, heading, and footnote HTML tables.
-
-    Such tables still contain useful prose, so callers flatten them into the
-    narrative instead of discarding them or creating separate vector chunks.
-    """
-
-    if not rows:
-        return True
-    meaningful = [
-        _clean_inline(str(value))
-        for row in rows
-        for value in row
-        if _clean_inline(str(value))
-    ]
-    if not meaningful:
-        return True
-    row_count = len(rows)
-    max_columns = max((len(row) for row in rows), default=0)
-    role = str(table.get("role", "")).casefold()
-    leading_values = [
-        next(
-            (
-                _clean_inline(str(value))
-                for value in row
-                if _clean_inline(str(value))
-            ),
-            "",
-        )
-        for row in rows
-    ]
-    bullet_rows = sum(value in _BULLET_VALUES for value in leading_values)
-    has_bullet_column = bullet_rows >= max(1, (row_count + 1) // 2)
-
-    if has_bullet_column:
-        return True
-    if row_count == 1:
-        return True
-    if max_columns <= 1:
-        return True
-    if role == "presentation" and not any(
-        re.search(r"(?:\$|%|\b20\d{2}\b|\d{1,3}(?:,\d{3})+)", value)
-        for value in meaningful
-    ):
-        return True
-    return False
-
-
-def _previous_table_context(table: Tag, *, limit: int = 4) -> Tuple[Optional[str], str]:
-    """Capture a nearby caption/title and short text preceding a table."""
-
-    caption = table.find("caption")
-    caption_text = _clean_inline(caption.get_text(" ", strip=True)) if caption else ""
-    candidates: List[str] = []
-    for prior in table.find_all_previous(
-        ["h1", "h2", "h3", "h4", "h5", "h6", "p", "div", "strong", "b"],
-        limit=30,
-    ):
-        if prior.find("table") is not None:
-            continue
-        value = _clean_inline(prior.get_text(" ", strip=True))
-        if not value or len(value) > 300 or value.isdigit() or value in candidates:
-            continue
-        candidates.append(value)
-        if len(candidates) >= limit:
-            break
-    candidates.reverse()
-    context = "\n".join(candidates)
-    title = caption_text
-    if not title:
-        for value in reversed(candidates):
-            alpha_words = re.findall(r"[A-Za-z]{2,}", value)
-            looks_like_heading = (
-                2 <= len(alpha_words) <= 18
-                and value.upper() == value
-                and not re.fullmatch(r"F-?\s*\d+", value, re.IGNORECASE)
-            )
-            if _FINANCIAL_TABLE_HINT_RE.search(value) or looks_like_heading:
-                title = value
-                break
-    if title:
-        repairs = {
-            r"\bASSET\s+S\b": "ASSETS",
-            r"\bCHANG\s+ES\b": "CHANGES",
-            r"\bFINANCI\s+AL\b": "FINANCIAL",
-            r"\bSTATEMEN\s+TS\b": "STATEMENTS",
-        }
-        for pattern, replacement in repairs.items():
-            title = re.sub(pattern, replacement, title, flags=re.IGNORECASE)
-    return title or None, context
-
-
-def _table_metadata(
-    table: Tag,
-    rows: Sequence[Sequence[str]],
-) -> Dict[str, object]:
-    markdown = _rows_to_markdown(rows)
-    embedding_text = _rows_to_embedding_text(rows)
-    table_title, context_before = _previous_table_context(table)
-    searchable = "\n".join(
-        value for value in (table_title or "", context_before, embedding_text) if value
-    )
-    table_type = (
-        "financial_table" if _FINANCIAL_TABLE_HINT_RE.search(searchable)
-        else "data_table"
-    )
-    periods = list(
-        dict.fromkeys(
-            _clean_inline(match.group(0))
-            for match in _PERIOD_RE.finditer(searchable)
-        )
-    )
-    units_match = _UNITS_RE.search(searchable)
-    return {
-        "table_id": "",
-        "table_type": table_type,
-        "table_title": table_title,
-        "context_before": context_before,
-        "units": (
-            _clean_inline(units_match.group(0)).strip("() ")
-            if units_match else None
-        ),
-        "periods": periods,
-        "markdown": markdown,
-        "embedding_text": embedding_text,
-        "rows": rows,
-    }
-
-
 def _extract_and_replace_tables(soup: BeautifulSoup) -> Dict[int, Dict[str, object]]:
     """Extract tables while keeping temporary boundaries for section parsing.
 
@@ -647,12 +398,11 @@ def _extract_and_replace_tables(soup: BeautifulSoup) -> Dict[int, Dict[str, obje
     """
 
     tables: Dict[int, Dict[str, object]] = {}
-    all_tables = list(soup.find_all("table"))
-    source_order = {id(table): index for index, table in enumerate(all_tables)}
+    table_number = 0
     # Innermost tables are handled first. If an outer layout table contains a
     # rendered child-table marker, preserve its text but do not register a
     # duplicate table.
-    for table in reversed(all_tables):
+    for table in reversed(soup.find_all("table")):
         if table.parent is None:
             continue
         rows = _table_rows(table)
@@ -663,21 +413,20 @@ def _extract_and_replace_tables(soup: BeautifulSoup) -> Dict[int, Dict[str, obje
         if _TABLE_MARKER_RE.search(markdown):
             table.replace_with(NavigableString(f"\n{markdown}\n"))
             continue
-        if _is_presentational_table(table, rows):
-            narrative = _rows_to_narrative(rows)
-            table.replace_with(NavigableString(f"\n{narrative}\n"))
-            continue
-        internal_number = source_order[id(table)]
-        start_marker = f"[[SEC_TABLE_START_{internal_number}]]"
-        end_marker = f"[[SEC_TABLE_END_{internal_number}]]"
-        tables[internal_number] = _table_metadata(table, rows)
+        table_id = f"table-{table_number + 1:04d}"
+        start_marker = f"[[SEC_TABLE_START_{table_number}]]"
+        end_marker = f"[[SEC_TABLE_END_{table_number}]]"
+        tables[table_number] = {
+            "table_id": table_id,
+            "markdown": markdown,
+            "rows": rows,
+        }
         table.replace_with(
             NavigableString(
                 f"\n{start_marker}\n{markdown}\n{end_marker}\n"
             )
         )
-    for public_number, internal_number in enumerate(sorted(tables), start=1):
-        tables[internal_number]["table_id"] = f"table-{public_number:04d}"
+        table_number += 1
     return tables
 
 
@@ -745,12 +494,8 @@ def _plausible_heading(form_type: str, item: str, title: str) -> bool:
         return False
     normalized_title = _clean_inline(title).casefold().strip(".|:- ")
     hints = _TITLE_HINTS.get(form_type, {}).get(item, ())
-    canonical_title = _canonical_match_text(normalized_title)
     return bool(normalized_title) and (
-        not hints or any(
-            _canonical_match_text(hint) in canonical_title
-            for hint in hints
-        )
+        not hints or any(hint.casefold() in normalized_title for hint in hints)
     )
 
 
@@ -864,48 +609,6 @@ def _clean_section(
     return "\n".join(lines).strip()
 
 
-def _tables_in_range(
-    raw_section: str,
-    tables: Optional[Mapping[int, Dict[str, object]]],
-) -> List[Dict[str, object]]:
-    return [
-        dict(tables[number])
-        for number in dict.fromkeys(
-            int(match.group(1)) for match in _TABLE_MARKER_RE.finditer(raw_section)
-        )
-        if tables and number in tables
-    ]
-
-
-def _next_boundary(start: int, boundaries: Iterable[int], default: int) -> int:
-    return min((value for value in boundaries if value > start), default=default)
-
-
-def _renumber_section_tables(sections: List[Dict[str, object]]) -> None:
-    """Give retained tables gap-free IDs in final corpus reading order."""
-
-    replacements: Dict[str, str] = {}
-    next_number = 1
-    for section in sections:
-        for table in section["tables"]:
-            old_id = str(table["table_id"])
-            new_id = f"table-{next_number:04d}"
-            replacements[old_id] = new_id
-            table["table_id"] = new_id
-            next_number += 1
-
-    if not replacements:
-        return
-    reference_re = re.compile(r"\[\[TABLE:(?P<table_id>table-\d{4})\]\]")
-    for section in sections:
-        section["text"] = reference_re.sub(
-            lambda match: (
-                f"[[TABLE:{replacements.get(match.group('table_id'), match.group('table_id'))}]]"
-            ),
-            str(section["text"]),
-        )
-
-
 def _extract_sections(
     text: str,
     form_type: str,
@@ -915,28 +618,8 @@ def _extract_sections(
     if not candidates:
         raise FilingParseError("No SEC item headings were found in the filing HTML.")
 
-    valid_item_candidates = [
-        candidate
-        for candidate in candidates
-        if _section_key(candidate, form_type) is not None
-    ]
-    last_item_start = max(
-        (candidate.start for candidate in valid_item_candidates),
-        default=0,
-    )
-    financial_match = (
-        _FINANCIAL_APPENDIX_RE.search(text, last_item_start)
-        if form_type == "10-K" else None
-    )
-    glossary_match = _GLOSSARY_RE.search(text, last_item_start)
-
     structural_ends = [match.start() for match in _PART_HEADING_RE.finditer(text)]
-    signature_starts = [match.start() for match in _SIGNATURE_RE.finditer(text)]
-    structural_ends.extend(signature_starts)
-    if financial_match:
-        structural_ends.append(financial_match.start())
-    if glossary_match:
-        structural_ends.append(glossary_match.start())
+    structural_ends.extend(match.start() for match in _SIGNATURE_RE.finditer(text))
     structural_ends.sort()
 
     choices: Dict[
@@ -953,7 +636,13 @@ def _extract_sections(
                 end = boundary
                 break
         raw_section = text[candidate.start:end]
-        section_tables = _tables_in_range(raw_section, tables)
+        section_tables = [
+            dict(tables[number])
+            for number in dict.fromkeys(
+                int(match.group(1)) for match in _TABLE_MARKER_RE.finditer(raw_section)
+            )
+            if tables and number in tables
+        ]
         section = _clean_section(raw_section, tables)
         section_lines = section.splitlines()
         if section_lines and _ITEM_HEADING_RE.match(section_lines[0]):
@@ -963,17 +652,12 @@ def _extract_sections(
         if not section and not candidate.anchored:
             continue
 
-        # A real item is normally much longer than its TOC entry. Anchors are a
-        # useful tie-breaker, not proof that a short candidate is the body.
-        score = len(raw_section) + (1_000 if candidate.anchored else 0)
+        # TOC entries and cross-references are usually much shorter than the
+        # real item. Prefer anchored candidates, then the longest candidate.
+        score = len(raw_section) + (10_000_000 if candidate.anchored else 0)
         existing = choices.get(key)
         if existing is None or score > existing[0]:
-            title = _canonical_section_title(
-                form_type,
-                candidate.item,
-                candidate.part,
-                candidate.title,
-            )
+            title = _clean_inline(candidate.title).strip(" .|:-")
             choices[key] = (
                 score,
                 candidate.anchored,
@@ -998,65 +682,12 @@ def _extract_sections(
             "id": choices[key][2],
             "part": choices[key][3],
             "title": choices[key][4],
-            "section_type": "item",
             "text": choices[key][5],
             "tables": choices[key][6],
         }
         for key in order
         if key in choices
     ]
-
-    named_starts = [
-        match.start()
-        for match in (glossary_match, financial_match)
-        if match is not None
-    ]
-    if glossary_match:
-        start = glossary_match.start()
-        end = _next_boundary(
-            start,
-            [*signature_starts, *(value for value in named_starts if value != start)],
-            len(text),
-        )
-        raw_section = text[start:end]
-        sections.append(
-            {
-                "id": "GLOSSARY",
-                "part": None,
-                "title": "Glossary of Defined Terms",
-                "section_type": "glossary",
-                "text": _clean_section(raw_section, tables),
-                "tables": _tables_in_range(raw_section, tables),
-            }
-        )
-    if financial_match:
-        start = financial_match.start()
-        end = _next_boundary(start, signature_starts, len(text))
-        raw_section = text[start:end]
-        sections.append(
-            {
-                "id": "FINANCIAL_STATEMENTS",
-                "part": None,
-                "title": "Financial Statements",
-                "section_type": "financial_statements",
-                "text": _clean_section(raw_section, tables),
-                "tables": _tables_in_range(raw_section, tables),
-            }
-        )
-    for section in sections:
-        is_financial_section = (
-            section["section_type"] == "financial_statements"
-            or (form_type == "10-K" and section["id"] == "8")
-            or (
-                form_type == "10-Q"
-                and section["part"] == "Part I"
-                and section["id"] == "1"
-            )
-        )
-        if is_financial_section:
-            for table in section["tables"]:
-                table["table_type"] = "financial_table"
-    _renumber_section_tables(sections)
     if not sections:
         raise FilingParseError("Item headings were found, but no sections could be extracted.")
     return sections
@@ -1195,7 +826,6 @@ def _arrow_schema() -> pa.Schema:
                             pa.field("id", pa.string(), nullable=False),
                             pa.field("part", pa.string(), nullable=True),
                             pa.field("title", pa.string(), nullable=False),
-                            pa.field("section_type", pa.string(), nullable=False),
                             pa.field("text", pa.string(), nullable=False),
                             pa.field(
                                 "tables",
@@ -1203,17 +833,7 @@ def _arrow_schema() -> pa.Schema:
                                     pa.struct(
                                         [
                                             pa.field("table_id", pa.string(), nullable=False),
-                                            pa.field("table_type", pa.string(), nullable=False),
-                                            pa.field("table_title", pa.string(), nullable=True),
-                                            pa.field("context_before", pa.string(), nullable=False),
-                                            pa.field("units", pa.string(), nullable=True),
-                                            pa.field(
-                                                "periods",
-                                                pa.list_(pa.string()),
-                                                nullable=False,
-                                            ),
                                             pa.field("markdown", pa.string(), nullable=False),
-                                            pa.field("embedding_text", pa.string(), nullable=False),
                                             pa.field(
                                                 "rows",
                                                 pa.list_(pa.list_(pa.string())),

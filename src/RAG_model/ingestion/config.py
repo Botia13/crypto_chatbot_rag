@@ -1,5 +1,5 @@
 # config.py
-PIPELINE_VERSION = "v1_2"
+PIPELINE_VERSION = "v1_3"
 
 # The model to use to generate the answers
 
@@ -33,7 +33,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 ## Input name with the csv that has the SEC html links as CSV
 SEC_INPUT_NAME = (PROJECT_ROOT / "data" / "url_links.csv")
 ## Output Name for the parquet file that has the SEC docs.
-SEC_OUTPUT_NAME =  (PROJECT_ROOT / "data" / "parquet_files" / f"sec_corpus_filings_v1.parquet")
+SEC_OUTPUT_NAME =  (PROJECT_ROOT / "data" / "parquet_files" / f"sec_corpus_filings_v1_3.parquet")
 ## Path for the QDRANT STORAGE
 DB_PATH_NAME = (PROJECT_ROOT /"data"/ "qdrant_storage")
 

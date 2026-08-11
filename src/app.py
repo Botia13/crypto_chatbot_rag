@@ -17,6 +17,9 @@ def format_context(chunks: list[dict]) -> str:
             f"- Section: {chunk['section_title']}\n"
             f"- [Open SEC filing]({chunk['source_url']})\n\n"
             f"{chunk['chunk_text']}"
+            f"- Section key: `{chunk.get('section_key', 'N/A')}`\n"
+            f"- Table: {chunk.get('table_title') or 'N/A'}\n"
+            f"- Table type: {chunk.get('table_type') or 'text'}\n"
         )
     return "\n\n---\n\n".join(blocks)
 
