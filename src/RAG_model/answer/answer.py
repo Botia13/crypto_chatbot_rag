@@ -121,6 +121,7 @@ def answer(question: str, run_config:dict, history:list[dict] | None = None):
     response = client.chat.completions.create(
         model = run_config["generation_model"],
         messages=messages,
+        temperature=run_config["temperature"]
     )
     generation_end = perf_counter()
     generation_usage = {"input_tokens":response.usage.prompt_tokens,
