@@ -30,6 +30,7 @@ BASELINE_RUN_CONFIG = {
     "ragas_enabled": True,
     "ragas_evaluator_model": "openai/gpt-4o-mini",
     "answer_correct_threshold": 0.8,
+    "ragas_temperature": 0
 }
 
 
