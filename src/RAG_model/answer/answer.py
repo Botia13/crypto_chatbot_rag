@@ -15,9 +15,10 @@ print("Qdrant client Open.")
 
 client = create_openrouter_client()
 
-def fetch_context(question: str,retrieval_k: int,embedding_model: str,collection_name: str) -> list[dict]:
+def fetch_context(question: str,retrieval_k: int,embedding_model: str,collection_name: str):
     
-    query = client.embeddings.create(model=embedding_model,input=[question]).data[0].embedding
+    embedding_response = client.embeddings.create(model=embedding_model,input=[question])
+    query = embedding_response.data[0].embedding
 
     results = qdrant_client.query_points(collection_name=collection_name,query=query,limit=retrieval_k,with_payload=True)
     
@@ -26,6 +27,7 @@ def fetch_context(question: str,retrieval_k: int,embedding_model: str,collection
         payload = point.payload or {}
         chunks.append({
             "chunk_id": payload.get("chunk_id"),
+            "accession_number": payload.get("accession_number"),
             "chunk_text": payload.get("chunk_text"),
             "ticker": payload.get("ticker"),
             "filing_date": payload.get("filing_date"),
@@ -38,7 +40,11 @@ def fetch_context(question: str,retrieval_k: int,embedding_model: str,collection
             "table_type": payload.get("table_type"),
             "table_title": payload.get("table_title")
         })
-    return chunks
+    
+    embedding_usage = {"input_tokens": embedding_response.usage.prompt_tokens,
+                         "total_tokens": embedding_response.usage.total_tokens}
+    
+    return chunks,embedding_usage
 
 
 def make_rag_messages(question, history, chunks, prompt_version: str):
@@ -77,7 +83,7 @@ def make_rag_messages(question, history, chunks, prompt_version: str):
    
 def format_answer(answer):
     
-    question, answer_text, chunks, latency_ms = answer
+    question, answer_text, chunks, latency_ms, token_usage = answer
     
     scores = [ {"chunk_id": chunk["chunk_id"],
                 "scores": chunk["score"]} for chunk in chunks]
@@ -88,7 +94,8 @@ def format_answer(answer):
         "Similarity Scores": scores,
         "Retrieved Chunk texts": chunks,
         "Citations": re.findall(r"\[SOURCE:\s*([^\]]+)\]", answer_text),
-        "Latency": latency_ms
+        "Latency": latency_ms,
+        "Token_usage": token_usage
     }
     
        
@@ -103,7 +110,7 @@ def answer(question: str, run_config:dict, history:list[dict] | None = None):
     
     
     retrieval_start = perf_counter()
-    chunks = fetch_context(question=question, retrieval_k=run_config["retrieval_k"],embedding_model=run_config["embedding_model"],collection_name=run_config["collection_name"],)
+    chunks, embedding_usage = fetch_context(question=question, retrieval_k=run_config["retrieval_k"],embedding_model=run_config["embedding_model"],collection_name=run_config["collection_name"])
     retrieval_end = perf_counter()
     
     prompt_start = perf_counter()
@@ -116,6 +123,9 @@ def answer(question: str, run_config:dict, history:list[dict] | None = None):
         messages=messages,
     )
     generation_end = perf_counter()
+    generation_usage = {"input_tokens":response.usage.prompt_tokens,
+                        "output_tokens": response.usage.completion_tokens,
+                        "total_tokens":response.usage.total_tokens}
     
     answer_text = response.choices[0].message.content
     
@@ -126,7 +136,19 @@ def answer(question: str, run_config:dict, history:list[dict] | None = None):
         "total": (generation_end - total_start) * 1000
     }
     
-    result = question, answer_text, chunks, latency_ms
+    token_usage = {
+    "embedding_input_tokens": embedding_usage["input_tokens"],
+    "embedding_total_tokens": embedding_usage["total_tokens"],
+    "generation_input_tokens": generation_usage["input_tokens"],
+    "generation_output_tokens": generation_usage["output_tokens"],
+    "generation_total_tokens": generation_usage["total_tokens"],
+    "rag_total_tokens": (
+        embedding_usage["total_tokens"]
+        + generation_usage["total_tokens"]
+    )
+}
+    
+    result = question, answer_text, chunks, latency_ms, token_usage
     
     final_answer = format_answer(result)
     

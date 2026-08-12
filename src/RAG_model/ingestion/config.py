@@ -25,6 +25,11 @@ BASELINE_RUN_CONFIG = {
     "chunk_overlap": 75,
     "encoding_name": "cl100k_base",
     "embedding_batch_size": 50,
+    
+    # RAGAS paramaters
+    "ragas_enabled": True,
+    "ragas_evaluator_model": "openai/gpt-4o-mini",
+    "answer_correct_threshold": 0.8,
 }
 
 
