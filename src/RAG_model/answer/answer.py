@@ -1,11 +1,10 @@
 import re
-from RAG_model.ingestion.config import EMBEDDINGS_MODEL, COLLECTION_NAME, DB_PATH_NAME, GENERATION_MODEL, RETRIEVAL_K
 from RAG_model.ingestion.embedding import create_openrouter_client
 from qdrant_client import QdrantClient
 from time import perf_counter
 from pathlib import Path
 from dotenv import load_dotenv
-
+from RAG_model.ingestion.config import DB_PATH_NAME, BASELINE_RUN_CONFIG
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 load_dotenv(PROJECT_ROOT / ".env")
@@ -16,9 +15,12 @@ print("Qdrant client Open.")
 
 client = create_openrouter_client()
 
-def fetch_context(question: str, retrieval_k: int = RETRIEVAL_K) -> list[dict]:
-    query = client.embeddings.create(model=EMBEDDINGS_MODEL, input=[question]).data[0].embedding
-    results = qdrant_client.query_points(collection_name=COLLECTION_NAME, query=query, limit=retrieval_k, with_payload=True)
+def fetch_context(question: str,retrieval_k: int,embedding_model: str,collection_name: str) -> list[dict]:
+    
+    query = client.embeddings.create(model=embedding_model,input=[question]).data[0].embedding
+
+    results = qdrant_client.query_points(collection_name=collection_name,query=query,limit=retrieval_k,with_payload=True)
+    
     chunks = []
     for point in results.points:
         payload = point.payload or {}
@@ -39,8 +41,12 @@ def fetch_context(question: str, retrieval_k: int = RETRIEVAL_K) -> list[dict]:
     return chunks
 
 
-def make_rag_messages(question, history, chunks):
+def make_rag_messages(question, history, chunks, prompt_version: str):
     """Build chat messages for the RAG answer step: system (with context) + history + user question."""
+    
+    if prompt_version != "v1":
+     raise ValueError(f"Unknown prompt version: {prompt_version}")
+    
     context = "\n\n".join(
         f"""[SOURCE: {chunk['chunk_id']}]
     Ticker: {chunk['ticker']}
@@ -88,7 +94,7 @@ def format_answer(answer):
        
    
 
-def answer(question: str, history:list[dict] | None = None):
+def answer(question: str, run_config:dict, history:list[dict] | None = None):
     
     if history is None:
         history = []
@@ -97,16 +103,16 @@ def answer(question: str, history:list[dict] | None = None):
     
     
     retrieval_start = perf_counter()
-    chunks = fetch_context(question)
+    chunks = fetch_context(question=question, retrieval_k=run_config["retrieval_k"],embedding_model=run_config["embedding_model"],collection_name=run_config["collection_name"],)
     retrieval_end = perf_counter()
     
     prompt_start = perf_counter()
-    messages = make_rag_messages(question, history, chunks)
+    messages = make_rag_messages(question,history,chunks,prompt_version=run_config["prompt_version"])
     prompt_end = perf_counter()
     
     generation_start = perf_counter()
     response = client.chat.completions.create(
-        model=GENERATION_MODEL,
+        model = run_config["generation_model"],
         messages=messages,
     )
     generation_end = perf_counter()
@@ -117,7 +123,7 @@ def answer(question: str, history:list[dict] | None = None):
         "retrieval": (retrieval_end - retrieval_start) * 1000,
         "prompt_building": (prompt_end - prompt_start) * 1000,
         "generation": (generation_end - generation_start) * 1000,
-        "total": (generation_end - total_start) * 1000,
+        "total": (generation_end - total_start) * 1000
     }
     
     result = question, answer_text, chunks, latency_ms
@@ -130,7 +136,7 @@ def main() -> None:
     question = input("Question: ").strip()
     if not question:
         raise SystemExit("A question is required.")
-    result = answer(question)
+    result = answer(question, BASELINE_RUN_CONFIG)
     print("\nAnswer:\n", result["Answer"])
 
     

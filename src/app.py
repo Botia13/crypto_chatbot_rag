@@ -1,7 +1,7 @@
 import gradio as gr
 
 from RAG_model.answer.answer import answer
-
+from RAG_model.ingestion.config import BASELINE_RUN_CONFIG
 
 def format_context(chunks: list[dict]) -> str:
     if not chunks:
@@ -32,7 +32,7 @@ def ask_question(question: str, history: list[dict] | None):
         return "", history, "*Enter a question first.*", {}
 
     try:
-        result = answer(question, history)
+        result = answer(question, run_config=BASELINE_RUN_CONFIG,history=history)
     except Exception as error:
         error_message = "I could not complete the request. Check the terminal for details."
         updated_history = history + [

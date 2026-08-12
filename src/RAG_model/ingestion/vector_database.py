@@ -1,17 +1,15 @@
 from qdrant_client.models import Distance, VectorParams, PointStruct
 from uuid import uuid5, NAMESPACE_URL
-from .config import COLLECTION_NAME
 
 
 
 # Create the Server and client for Qdrant
-def create_qdrant_collection(qdrant_client,vector_size):
-
+def create_qdrant_collection(qdrant_client, collection_name: str, vector_size: int):
     
     # Check if the collection already exists and if the vector size match the collection dimensions
-    if qdrant_client.collection_exists(COLLECTION_NAME):
+    if qdrant_client.collection_exists(collection_name):
         collection_info = qdrant_client.get_collection(
-            collection_name=COLLECTION_NAME
+            collection_name=collection_name
         )
 
         existing_vector_size = (
@@ -20,26 +18,26 @@ def create_qdrant_collection(qdrant_client,vector_size):
 
         if existing_vector_size != vector_size:
             raise ValueError(
-                f"Collection '{COLLECTION_NAME}' expects vectors "
+                f"Collection '{collection_name}' expects vectors "
                 f"with {existing_vector_size} dimensions, but the "
                 f"current embedding model returned {vector_size}."
             )
 
         print(
-            f"Collection already exists: {COLLECTION_NAME}"
+            f"Collection already exists: {collection_name}"
         )
         return
     
     # Create the collection and define the vector parameters (size and distance metric)
     qdrant_client.create_collection(
-        collection_name = COLLECTION_NAME,
+        collection_name = collection_name,
         vectors_config = VectorParams(
             size = vector_size,
             distance = Distance.COSINE
         )
     )
     
-    print(f"Created collection: {COLLECTION_NAME}")
+    print(f"Created collection: {collection_name}")
 
 # Generate a point format for each embedded chunk 
 def create_point(embedded_chunk):
@@ -81,7 +79,7 @@ def create_point(embedded_chunk):
     )
 
 # Store the embeddings in Qdrant
-def store_embeddings (qdrant_client, embedded_chunks, batch_size = 100):
+def store_embeddings(qdrant_client,collection_name: str,embedded_chunks,batch_size: int = 100):
     
     if not embedded_chunks:
         raise ValueError(
@@ -97,7 +95,7 @@ def store_embeddings (qdrant_client, embedded_chunks, batch_size = 100):
         
         # Add the points to the collection 
         qdrant_client.upsert(
-            collection_name  =  COLLECTION_NAME,
+            collection_name  =  collection_name,
             points = points,
             wait = True
         )

@@ -1,17 +1,18 @@
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from .config import CHUNK_OVERLAP, CHUNK_SIZE, ENCODING_NAME, PIPELINE_VERSION
-
+from .config import PIPELINE_VERSION
 
 
 # Define the encoding for the text splitter
-splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
-    encoding_name=ENCODING_NAME,
-    chunk_size=CHUNK_SIZE,       # Maximum tokens per chunk
-    chunk_overlap=CHUNK_OVERLAP,     # Repeated tokens between adjacent chunks
-    separators=["\n\n", "\n", ". ", " ", ""],
-)
+def create_splitter(run_config: dict):
+    return RecursiveCharacterTextSplitter.from_tiktoken_encoder(
+        encoding_name=run_config["encoding_name"],
+        chunk_size=run_config["chunk_size"],
+        chunk_overlap=run_config["chunk_overlap"],
+        separators=["\n\n", "\n", ". ", " ", ""],
+    )
 
-def chunk_document(document):
+def chunk_document(document, splitter, pipeline_version: str):
+    
     """
     Splits a document into chunks based on its sections and tables.
     Follow these rules to make sure that the chunks are created correctly:
@@ -64,7 +65,7 @@ def chunk_document(document):
                         "section_type": section.get("section_type", "item"),
                         "chunk_title": section["title"],
                         "chunk_type": "text",
-                        "chunk_version": PIPELINE_VERSION,
+                        "chunk_version": pipeline_version,
                         "table_id": None,
                         "table_type": None,
                         "table_title": None,
@@ -113,7 +114,7 @@ def chunk_document(document):
                     "table_title": table_title,
                     "table_id": table_id,
                     "chunk_index": 0,
-                    "chunk_version": PIPELINE_VERSION,
+                    "chunk_version": pipeline_version,
                     "chunk_id": (
                         f"{document['accession_number']}"
                         f"*{section_key}"
@@ -126,12 +127,16 @@ def chunk_document(document):
     return chunk_records
     
     
-def get_chunks_from_corpus(df_corpus):
-    """
-    Splits all documents in the corpus into chunks and returns a list of chunk records.
-    """
+def get_chunks_from_corpus(df_corpus, run_config: dict):
+    splitter = create_splitter(run_config)
+
     chunks_final = []
     for _, row in df_corpus.iterrows():
-        document_chunks = chunk_document(row)
+        document_chunks = chunk_document(
+            row,
+            splitter=splitter,
+            pipeline_version=run_config["pipeline_version"],
+        )
         chunks_final.extend(document_chunks)
+
     return chunks_final

@@ -6,8 +6,7 @@ from .embedding import create_embeddings
 from .vector_database import store_embeddings, create_qdrant_collection
 from qdrant_client import QdrantClient
 from dotenv import load_dotenv
-from .config import  PROJECT_ROOT, SEC_INPUT_NAME, SEC_OUTPUT_NAME, DB_PATH_NAME
-
+from .config import PROJECT_ROOT,SEC_INPUT_NAME,SEC_OUTPUT_NAME,DB_PATH_NAME,BASELINE_RUN_CONFIG
 
 
 
@@ -30,8 +29,8 @@ def ingest_html_sec(input_path = SEC_INPUT_NAME, output_path = SEC_OUTPUT_NAME):
         form_type_column="Type",
     )
     
-def ingestion ():
-    
+def ingestion(run_config: dict):
+        
     # Load the env variables 
     environment_path = PROJECT_ROOT / ".env"
     loaded = load_dotenv(
@@ -54,18 +53,30 @@ def ingestion ():
     corpus = pd.read_parquet(SEC_OUTPUT_NAME)
     
     # Chunk the corpus
-    chunks = get_chunks_from_corpus(corpus)
+    chunks = get_chunks_from_corpus(corpus, run_config)
     print("Chunking step Complete")
     
     #Embedd the chunks
-    embeddings = create_embeddings(chunks)
+    embeddings = create_embeddings(chunks,
+    model=run_config["embedding_model"],
+    batch_size=run_config["embedding_batch_size"],
+    pipeline_version=run_config["pipeline_version"])
+    
     print("Embedding Step Complete")
     
     #Save the embeddings in Qdrant
     print("Starting to create the Qdrant database.")
     qdrant_client = QdrantClient(path = str(DB_PATH_NAME))
-    create_qdrant_collection(qdrant_client=qdrant_client,vector_size=embeddings['embedding_dimensions'])
-    store_embeddings(qdrant_client=qdrant_client, embedded_chunks=embeddings['embedded_chunks'])
+    
+    create_qdrant_collection(
+        qdrant_client=qdrant_client,
+        collection_name=run_config["collection_name"],
+        vector_size=embeddings["embedding_dimensions"])
+
+    store_embeddings(
+        qdrant_client=qdrant_client,
+        collection_name=run_config["collection_name"],
+        embedded_chunks=embeddings["embedded_chunks"])
     
     # Summary data for the ingestion made
     summary = {
@@ -83,4 +94,4 @@ def ingestion ():
         
     
 if __name__ == "__main__":
-    ingestion()
+    ingestion(BASELINE_RUN_CONFIG)

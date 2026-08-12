@@ -1,6 +1,6 @@
 import os 
 from openai import OpenAI
-from .config import EMBEDDINGS_BATCH_SIZE, EMBEDDINGS_MODEL, OPENROUTER_BASE_URL, PIPELINE_VERSION
+from .config import OPENROUTER_BASE_URL
 
 # Create a small client factory 
 def create_openrouter_client():
@@ -17,8 +17,8 @@ def create_openrouter_client():
     
 
 
-def create_embeddings(chunks, model = EMBEDDINGS_MODEL, batch_size = EMBEDDINGS_BATCH_SIZE, embedding_client=None):
-    
+def create_embeddings(chunks, model: str, batch_size: int, pipeline_version: str, embedding_client=None):    
+   
     """Create embeddings for a list of text chunks using the specified model and batch size."""
     
     embedded_chunks = []
@@ -67,7 +67,7 @@ def create_embeddings(chunks, model = EMBEDDINGS_MODEL, batch_size = EMBEDDINGS_
     
     vectors_data = {
         "embedding_model": model,
-        "chunking_version" : PIPELINE_VERSION,
+        "chunking_version": pipeline_version,
         "embedding_dimensions": len(embedded_chunks[0]['embedding']),
         "total_chunks": len(chunks),
         "embedded_chunks": embedded_chunks
