@@ -7,7 +7,7 @@ from ragas.metrics import Faithfulness,FactualCorrectness,LLMContextPrecisionWit
 from RAG_model.answer.answer import answer
 from RAG_model.ingestion.config import BASELINE_RUN_CONFIG, OPENROUTER_BASE_URL
 from pathlib import Path
-
+from tqdm.auto import tqdm
 
 # Read the questions file 
 def load_evaluation_questions():
@@ -168,7 +168,7 @@ async def evaluate_all_questions(questions: pd.DataFrame,run_config, metrics):
     question_results = []
     
     # Add a dict for each question with the respective results
-    for _ ,row in questions.iterrows():
+    for _ ,row in tqdm(questions.iterrows(),total = len(questions), desc= 'Evaluating Questions'):
         question_dict = row.to_dict()
         
         deterministic_answer = evaluate_question_deterministic(question_dict,run_config)

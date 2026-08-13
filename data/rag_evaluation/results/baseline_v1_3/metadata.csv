@@ -1,0 +1,2 @@
+experiment_name,pipeline_version,retrieval_k,embedding_model,generation_model,temperature,prompt_version,ragas_evaluator_model,ragas_temperature
+baseline_v1_3,v1_3,5,openai/text-embedding-3-small,openai/gpt-4o-mini,0,v1,openai/gpt-4o-mini,0
