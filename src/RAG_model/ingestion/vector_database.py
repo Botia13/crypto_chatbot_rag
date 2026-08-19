@@ -1,6 +1,44 @@
-from qdrant_client.models import Distance, VectorParams, PointStruct
+from qdrant_client.models import (
+    Distance,
+    FieldCondition,
+    Filter,
+    MatchValue,
+    PointStruct,
+    VectorParams,
+)
 from uuid import uuid5, NAMESPACE_URL
 
+
+# Checks if the collection already exists
+def index_is_ready(
+    qdrant_client,
+    collection_name: str,
+    embedding_input_version: str | None = None,
+) -> bool:
+    if not qdrant_client.collection_exists(collection_name):
+        return False
+
+    info = qdrant_client.get_collection(collection_name)
+    if info.points_count == 0:
+        return False
+    if embedding_input_version is None:
+        return True
+
+    mismatched_points, _ = qdrant_client.scroll(
+        collection_name=collection_name,
+        limit=1,
+        scroll_filter=Filter(
+            must_not=[
+                FieldCondition(
+                    key="embedding_input_version",
+                    match=MatchValue(value=embedding_input_version),
+                )
+            ]
+        ),
+        with_payload=["embedding_input_version"],
+        with_vectors=False,
+    )
+    return not mismatched_points
 
 
 # Create the Server and client for Qdrant
@@ -11,11 +49,9 @@ def create_qdrant_collection(qdrant_client, collection_name: str, vector_size: i
         collection_info = qdrant_client.get_collection(
             collection_name=collection_name
         )
-
         existing_vector_size = (
             collection_info.config.params.vectors.size
         )
-
         if existing_vector_size != vector_size:
             raise ValueError(
                 f"Collection '{collection_name}' expects vectors "
@@ -67,7 +103,8 @@ def create_point(embedded_chunk):
         "chunk_version": embedded_chunk["chunk_version"],
         "section_id": embedded_chunk["section_id"],
         "chunk_title": embedded_chunk["chunk_title"],
-        "chunk_type": embedded_chunk["chunk_type"]
+        "chunk_type": embedded_chunk["chunk_type"],
+        "embedding_input_version": embedded_chunk["embedding_input_version"],
     }
     if embedded_chunk['table_id'] is not None:
         payload["table_id"] = embedded_chunk["table_id"]
@@ -104,4 +141,3 @@ def store_embeddings(qdrant_client,collection_name: str,embedded_chunks,batch_si
             f"Stored {min(start + batch_size, len(embedded_chunks))}"
             f"/{len(embedded_chunks)} chunks"
         )
-        

@@ -49,3 +49,20 @@ Run the regression tests with:
 python -m pip install -r requirements-dev.txt
 python -m pytest -q
 ```
+
+## Retrieval-only evaluation
+
+To evaluate retrieval without calling a generation model or RAGAS evaluator:
+
+```python
+from RAG_model.evaluation.evaluation import main
+
+detailed_results, summary = await main(
+    run_config,
+    retrieval_only=True,
+)
+```
+
+The output is written below the experiment's `retrieval_only` directory. In a
+single Python process, configurations that share a Qdrant collection prepare
+that vector index only once, even when several generation models are tested.

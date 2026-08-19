@@ -1,5 +1,5 @@
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from .config import PIPELINE_VERSION
+from .config import BASELINE_RUN_CONFIG, PIPELINE_VERSION
 
 
 # Define the encoding for the text splitter
@@ -11,7 +11,11 @@ def create_splitter(run_config: dict):
         separators=["\n\n", "\n", ". ", " ", ""],
     )
 
-def chunk_document(document, splitter, pipeline_version: str):
+def chunk_document(
+    document,
+    splitter=None,
+    pipeline_version: str = PIPELINE_VERSION,
+):
     
     """
     Splits a document into chunks based on its sections and tables.
@@ -25,6 +29,9 @@ def chunk_document(document, splitter, pipeline_version: str):
     7. Refer the table id in the chunk id for table chunks.
 
     """
+    if splitter is None:
+        splitter = create_splitter(BASELINE_RUN_CONFIG)
+
     chunk_records = []
 
     for section in document["sections"]:

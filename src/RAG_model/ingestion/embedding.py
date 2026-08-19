@@ -2,6 +2,21 @@ import os
 from openai import OpenAI
 from .config import OPENROUTER_BASE_URL
 
+
+EMBEDDING_METADATA_FIELDS = (
+    ("Ticker", "ticker"),
+    ("Company", "company_name"),
+    ("Form type", "form_type"),
+    ("Filing date", "filing_date"),
+    ("Period end", "period_end"),
+    ("Accession number", "accession_number"),
+    ("Section", "chunk_title"),
+    ("Section key", "section_key"),
+    ("Chunk type", "chunk_type"),
+    ("Table title", "table_title"),
+)
+EMBEDDING_INPUT_VERSION = "metadata-v1"
+
 # Create a small client factory 
 def create_openrouter_client():
     
@@ -14,6 +29,17 @@ def create_openrouter_client():
                   base_url= OPENROUTER_BASE_URL,
                   max_retries=8,
                   timeout=60.0)
+
+
+def embedding_text(chunk: dict) -> str:
+    """Return searchable metadata plus content for a chunk embedding."""
+    metadata_lines = [
+        f"{label}: {chunk.get(field)}"
+        for label, field in EMBEDDING_METADATA_FIELDS
+        if chunk.get(field) not in (None, "")
+    ]
+    chunk_text = str(chunk.get("chunk_text", "")).strip()
+    return "Metadata:\n" + "\n".join(metadata_lines) + f"\n\nContent:\n{chunk_text}"
     
 
 
@@ -35,12 +61,12 @@ def create_embeddings(chunks, model: str, batch_size: int, pipeline_version: str
         
         end =  start + batch_size
         batch = chunks[start:end]
-        
-        texts = [chunk['chunk_text'].strip() for chunk in batch]
-        
-        # Check for empty text in the batch
-        if any(not text for text in texts):
+
+        raw_texts = [str(chunk.get("chunk_text", "")).strip() for chunk in batch]
+        if any(not text for text in raw_texts):
             raise ValueError("One or more chunks have empty text. Please check the input data.")
+
+        texts = [embedding_text(chunk) for chunk in batch]
 
         # Create embeddings for the batch    
         response = embedding_client.embeddings.create(
@@ -60,6 +86,7 @@ def create_embeddings(chunks, model: str, batch_size: int, pipeline_version: str
         for chunk, item in zip(batch, response_ordered, strict=True):
             embedded_chunks.append({
                 **chunk,
+                "embedding_input_version": EMBEDDING_INPUT_VERSION,
                 "embedding" : item.embedding
             })
         

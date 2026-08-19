@@ -1,7 +1,9 @@
 import gradio as gr
 
 from RAG_model.answer.answer import answer
-from RAG_model.ingestion.config import BASELINE_RUN_CONFIG
+from RAG_model.ingestion.config import BASELINE_RUN_CONFIG,DB_PATH_NAME
+from qdrant_client import QdrantClient
+
 
 def format_context(chunks: list[dict]) -> str:
     if not chunks:
@@ -31,8 +33,10 @@ def ask_question(question: str, history: list[dict] | None):
     if not question:
         return "", history, "*Enter a question first.*", {}
 
+    qdrant_client = None
     try:
-        result = answer(question, run_config=BASELINE_RUN_CONFIG,history=history)
+        qdrant_client = QdrantClient(path=str(DB_PATH_NAME))
+        result = answer(question, run_config=BASELINE_RUN_CONFIG,qdrant_client=qdrant_client,history=history)
     except Exception as error:
         error_message = "I could not complete the request. Check the terminal for details."
         updated_history = history + [
@@ -40,6 +44,9 @@ def ask_question(question: str, history: list[dict] | None):
             {"role": "assistant", "content": error_message},
         ]
         return "", updated_history, f"## Error\n\n`{type(error).__name__}: {error}`", {}
+    finally:
+        if qdrant_client is not None:
+            qdrant_client.close()
 
     updated_history = history + [
         {"role": "user", "content": question},
