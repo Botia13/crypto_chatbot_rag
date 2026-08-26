@@ -11,7 +11,7 @@ BASELINE_RUN_CONFIG = {
 
     # Ingestion configuration: record it for reproducibility (Chunks and Embeddings)
     "chunk_size": 500,
-    "chunk_overlap": 75,
+    "chunk_overlap": 120,
     "encoding_name": "cl100k_base",
     "embedding_batch_size": 50,
 
@@ -22,10 +22,10 @@ BASELINE_RUN_CONFIG = {
 
     # Changing the values below will not make a new vector database (retrieval and ragas)
     # Retrieval / generation
-    "retrieval_k": 5,
-    "generation_model": "openai/gpt-4o-mini",
+    "retrieval_k": 12,
+    "generation_model": "openai/gpt-5.6-luna",
     "temperature": 0,
-    "prompt_version": "v1",
+    "prompt_version": "v2",
     
     # RAGAS paramaters
     "ragas_enabled": True,
@@ -55,3 +55,10 @@ SEC_OUTPUT_NAME = (
 )
 ## Path for the QDRANT STORAGE
 DB_PATH_NAME = (PROJECT_ROOT /"data"/ "qdrant_storage")
+
+
+SYSTEM_PROMPT = """
+        You answer only with information from supplied SEC 10-K and 10-Q filing extracts.
+        The corpus covers IBIT, ETHA, FBTC, FETH, GBTC, and ETHE. If the corpus does not contain enough information, say: 'I could not find enough evidence in the retrieved SEC filings.'
+        Answer using only the supplied context. Cite every factual claim using supplied IDs in this format: [SOURCE: source-id]. Never invent a source ID. Do not infer, calculate, or compare values unless the retrieved context contains all evidence needed.
+        """
