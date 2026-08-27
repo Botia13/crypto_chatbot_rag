@@ -1,19 +1,39 @@
 import os
 from collections.abc import Mapping
+from time import perf_counter
 import pandas as pd
 from openai import AsyncOpenAI
 from ragas import SingleTurnSample
 from ragas.llms import llm_factory
 from ragas.metrics import Faithfulness,FactualCorrectness,LLMContextPrecisionWithReference
 from RAG_model.answer.answer import answer, retrieve
-from RAG_model.ingestion.config import BASELINE_RUN_CONFIG, OPENROUTER_BASE_URL, DB_PATH_NAME
+from RAG_model.ingestion.config import BASELINE_RUN_CONFIG, OPENROUTER_BASE_URL, DB_PATH_NAME, SYSTEM_PROMPT
 from RAG_model.ingestion.ingestion import ingestion
 from pathlib import Path
-from tqdm.auto import tqdm
+from tqdm import tqdm
 from qdrant_client import QdrantClient
 
 
 _PREPARED_COLLECTIONS: set[tuple] = set()
+
+
+def print_progress(
+    current: int,
+    total: int,
+    description: str,
+    detail: str,
+    started_at: float,
+) -> None:
+    """Print a tqdm-formatted progress snapshot without control characters."""
+    meter = tqdm.format_meter(
+        current,
+        total,
+        perf_counter() - started_at,
+        prefix=description,
+        ascii=True,
+        ncols=100,
+    )
+    print(f"{meter} | {detail}", flush=True)
 
 
 # Read the questions file 
@@ -31,7 +51,7 @@ def load_evaluation_questions():
 # Create evaluator LLM
 def create_ragas_metrics(run_config):
     ragas_client = AsyncOpenAI(api_key=os.environ["OPENROUTER_API_KEY"], base_url=OPENROUTER_BASE_URL, timeout=60.0 , max_retries = 5 )
-    ragas_llm = llm_factory(run_config['ragas_evaluator_model'],provider="openai", client = ragas_client, max_tokens = 2048, temperature=run_config["ragas_temperature"])
+    ragas_llm = llm_factory(run_config['ragas_evaluator_model'],provider="openai", client = ragas_client, max_tokens = 8192, temperature=run_config["ragas_temperature"])
 
     # Create metric Objects
     metrics = {
@@ -147,7 +167,8 @@ def prepare_vector_index(run_config: dict) -> None:
 def evaluate_question_deterministic(
     question_record: dict,
     run_config: dict,
-    qdrant_client,
+    system_prompt: str = SYSTEM_PROMPT,
+    qdrant_client=None,
     retrieval_only: bool = False,
 ):
     
@@ -160,6 +181,7 @@ def evaluate_question_deterministic(
         result = answer(
             question_record["question"],
             run_config=run_config,
+            system_prompt=system_prompt,
             qdrant_client=qdrant_client,
             history=None,
         )
@@ -305,16 +327,38 @@ async def evaluate_question_ragas(deterministic_result, metrics, return_values):
                 "ragas_context_precision": None
                 }
 
-async def evaluate_all_questions(questions: pd.DataFrame,run_config, metrics, qdrant_client,return_values, retrieval_only=False):
+async def evaluate_all_questions(
+    questions: pd.DataFrame,
+    run_config,
+    system_prompt: str = SYSTEM_PROMPT,
+    metrics=None,
+    qdrant_client=None,
+    return_values=True,
+    retrieval_only=False,
+):
     question_results = []
-    
+
+    generation_model = run_config.get("generation_model", "retrieval-only")
+    question_total = len(questions)
+    question_started_at = perf_counter()
+
     # Add a dict for each question with the respective results
-    for _ ,row in tqdm(questions.iterrows(),total = len(questions), desc= 'Evaluating Questions'):
+    for question_number, (_, row) in enumerate(questions.iterrows(), start=1):
+        question_text = str(row["question"]).replace("\n", " ").strip()
+        if len(question_text) > 80:
+            question_text = f"{question_text[:77]}..."
+        print_progress(
+            question_number - 1,
+            question_total,
+            f"Questions [{generation_model}]",
+            f"Evaluating Q{row['question_id']}: {question_text}",
+            question_started_at,
+        )
         question_dict = row.to_dict()
         
         try:
             deterministic_answer = evaluate_question_deterministic(
-                question_dict, run_config, qdrant_client, retrieval_only
+                question_dict, run_config,system_prompt, qdrant_client, retrieval_only
             )
             ragas_result = await evaluate_question_ragas(
                 deterministic_answer, metrics, return_values and not retrieval_only
@@ -375,7 +419,15 @@ async def evaluate_all_questions(questions: pd.DataFrame,run_config, metrics, qd
             "generation_output_tokens": (ragas_result["token_usage"]["generation_output_tokens"]),
             "rag_total_tokens": ragas_result["token_usage"]["rag_total_tokens"],
         })
-        
+
+    print_progress(
+        question_total,
+        question_total,
+        f"Questions [{generation_model}]",
+        "Complete",
+        question_started_at,
+    )
+
    
     return {
     "metadata": {
@@ -480,13 +532,20 @@ def summarize_evaluation(results_df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(summary_rows)
 
 
-async def evaluate(df_questions, run_config,metrics=None,return_values=True, retrieval_only=False):
+async def evaluate(
+    df_questions,
+    run_config,
+    system_prompt: str = SYSTEM_PROMPT,
+    metrics=None,
+    return_values=True,
+    retrieval_only=False,
+):
     run_config = normalize_run_config(run_config)
     prepare_vector_index(run_config)
     qdrant_client = QdrantClient(path=str(DB_PATH_NAME))
     try:
         evaluated_questions = await evaluate_all_questions(
-            df_questions, run_config, metrics, qdrant_client,
+            df_questions, run_config,system_prompt, metrics, qdrant_client,
             return_values, retrieval_only
         )
     finally:
@@ -497,7 +556,12 @@ async def evaluate(df_questions, run_config,metrics=None,return_values=True, ret
     return formatted_questions, summary
 
 
-async def main(run_config: dict,return_ragas_values=True, retrieval_only=False):
+async def main(
+    run_config: dict,
+    system_prompt: str = SYSTEM_PROMPT,
+    return_ragas_values=True,
+    retrieval_only=False,
+):
     run_config = normalize_run_config(run_config)
     questions = load_evaluation_questions()
 
@@ -508,7 +572,7 @@ async def main(run_config: dict,return_ragas_values=True, retrieval_only=False):
 
     try:
         detailed_questions, summary = await evaluate(
-            questions, run_config, metrics, return_ragas_values, retrieval_only
+            questions, run_config,system_prompt, metrics, return_ragas_values, retrieval_only
         )
 
         project_root = Path(__file__).resolve().parents[3]
@@ -556,4 +620,4 @@ async def main(run_config: dict,return_ragas_values=True, retrieval_only=False):
         
 if __name__ == "__main__":
     import asyncio
-    asyncio.run(main(BASELINE_RUN_CONFIG))
+    asyncio.run(main(BASELINE_RUN_CONFIG,SYSTEM_PROMPT))

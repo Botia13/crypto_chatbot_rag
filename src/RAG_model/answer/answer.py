@@ -4,7 +4,7 @@ from qdrant_client import QdrantClient
 from time import perf_counter
 from pathlib import Path
 from dotenv import load_dotenv
-from RAG_model.ingestion.config import DB_PATH_NAME, BASELINE_RUN_CONFIG
+from RAG_model.ingestion.config import DB_PATH_NAME, BASELINE_RUN_CONFIG, SYSTEM_PROMPT
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -38,6 +38,7 @@ def generate_response(messages, run_config: dict):
         model=run_config["generation_model"],
         messages=messages,
         temperature=run_config["temperature"],
+        max_tokens=1000
     )
 
     choices = response.choices or []
@@ -123,11 +124,8 @@ def retrieve(question: str, run_config: dict, qdrant_client):
     }
 
 
-def make_rag_messages(question, history, chunks, prompt_version: str):
+def make_rag_messages(question, history, chunks, system_prompt: str):
     """Build chat messages for the RAG answer step: system (with context) + history + user question."""
-    
-    if prompt_version != "v1":
-     raise ValueError(f"Unknown prompt version: {prompt_version}")
     
     context = "\n\n".join(
         f"""[SOURCE: {chunk['chunk_id']}]
@@ -141,12 +139,15 @@ def make_rag_messages(question, history, chunks, prompt_version: str):
     {chunk['chunk_text']}"""
         for chunk in chunks)
     
-    system_prompt = f"""You answer only with information from supplied SEC 10-K and 10-Q filing extracts.
-        The corpus covers IBIT, ETHA, FBTC, FETH, GBTC, and ETHE. If the corpus does not contain enough information, say: "I could not find enough evidence in the retrieved SEC filings."
-        Answer using only the supplied context. Cite every factual claim using supplied IDs in this format: [SOURCE: source-id]. Never invent a source ID. Do not infer, calculate, or compare values unless the retrieved context contains all evidence needed.
+    system_prompt = f"""
 
-        Context:
-        {context}"""
+    {system_prompt}
+
+    Context:
+    {context}
+
+    """
+
     
     return (
         [{"role": "system",
@@ -215,13 +216,19 @@ def format_answer(question,chunks,generation_result,embedding_usage, retrieval_l
     }
     
 
-def answer_from_chunks(question: str, chunks, run_config:dict,history:list[dict] | None = None):
+def answer_from_chunks(
+    question: str,
+    chunks,
+    run_config: dict,
+    system_prompt: str = SYSTEM_PROMPT,
+    history: list[dict] | None = None,
+):
     
     if history is None:
         history = []
 
     prompt_start = perf_counter()
-    messages = make_rag_messages(question,history,chunks,prompt_version=run_config["prompt_version"])
+    messages = make_rag_messages(question,history,chunks,system_prompt=system_prompt)
     prompt_end = perf_counter()
     
     generation_start = perf_counter()
@@ -255,7 +262,16 @@ def answer_from_chunks(question: str, chunks, run_config:dict,history:list[dict]
     }
     
 
-def answer(question, run_config, qdrant_client, history=None):
+def answer(
+    question,
+    run_config,
+    system_prompt: str = SYSTEM_PROMPT,
+    qdrant_client=None,
+    history=None,
+):
+    if qdrant_client is None:
+        raise ValueError("A Qdrant client is required to answer a question.")
+
     retrieval_result = retrieve(question, run_config, qdrant_client)
     chunks = retrieval_result["Retrieved Chunk texts"]
 
@@ -264,6 +280,7 @@ def answer(question, run_config, qdrant_client, history=None):
         chunks=chunks,
         run_config=run_config,
         history=history,
+        system_prompt=system_prompt
     )
 
     return format_answer(
@@ -278,22 +295,20 @@ def answer(question, run_config, qdrant_client, history=None):
     )
 
 
-def main() -> None:
+def main(system_prompt: str = SYSTEM_PROMPT) -> None:
     question = input("Question: ").strip()
     if not question:
         raise SystemExit("A question is required.")
     qdrant_client = QdrantClient(path=str(DB_PATH_NAME))
     try:
-        result = answer(question, BASELINE_RUN_CONFIG,qdrant_client)
+        result = answer(question, BASELINE_RUN_CONFIG,system_prompt,qdrant_client)
         print("\nAnswer:\n", result["Answer"])
     finally:
         qdrant_client.close()
     
 if __name__ == "__main__":
     try:
-        main()
+        main(SYSTEM_PROMPT)
     finally:
         client.close()
-
-
 
