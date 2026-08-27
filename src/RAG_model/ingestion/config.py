@@ -1,5 +1,5 @@
 # config.py
-PIPELINE_VERSION = "v1_3"
+PIPELINE_VERSION = "v3"
 
 # The model to use to generate the answers
 BASELINE_RUN_CONFIG = {
@@ -22,7 +22,8 @@ BASELINE_RUN_CONFIG = {
 
     # Changing the values below will not make a new vector database (retrieval and ragas)
     # Retrieval / generation
-    "retrieval_k": 12,
+    "retrieval_k": 5,
+    "candidate_k": 50,
     "generation_model": "openai/gpt-5.6-luna",
     "temperature": 0,
     "prompt_version": "v2",

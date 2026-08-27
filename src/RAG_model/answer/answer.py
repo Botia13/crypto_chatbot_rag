@@ -11,6 +11,9 @@ from tenacity import (
     stop_after_attempt,
     wait_exponential,
 )
+from sentence_transformers import CrossEncoder
+from qdrant_client import models          
+from fastembed import SparseTextEmbedding  
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -19,6 +22,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 
 client = create_openrouter_client()
+_bm25 = SparseTextEmbedding(model_name="Qdrant/bm25") 
 
 
 class EmptyGenerationResponseError(RuntimeError):
@@ -56,12 +60,30 @@ def generate_response(messages, run_config: dict):
 
     return response
 
-def fetch_context(question: str,retrieval_k: int,embedding_model: str,collection_name: str, qdrant_client):
+def fetch_context(question: str,candidate_k: int,embedding_model: str,collection_name: str, qdrant_client):
     
     embedding_response = client.embeddings.create(model=embedding_model,input=[question])
-    query = embedding_response.data[0].embedding
+    dense_q = embedding_response.data[0].embedding
+    
+    sparse_q = next(_bm25.embed(question))
 
-    results = qdrant_client.query_points(collection_name=collection_name,query=query,limit=retrieval_k,with_payload=True)
+    results = qdrant_client.query_points(
+        collection_name=collection_name,
+        prefetch=[
+            models.Prefetch(query=dense_q, using="dense", limit=candidate_k),
+            models.Prefetch(
+                query=models.SparseVector(
+                    indices=sparse_q.indices.tolist(),
+                    values=sparse_q.values.tolist(),
+                ),
+                using="bm25",
+                limit=candidate_k,
+            ),
+        ],
+        query=models.FusionQuery(fusion=models.Fusion.RRF),
+        limit=candidate_k,
+        with_payload=True,
+    )
     
     chunks = []
     for point in results.points:
@@ -88,24 +110,49 @@ def fetch_context(question: str,retrieval_k: int,embedding_model: str,collection
     return chunks,embedding_usage
 
 
+reranker = CrossEncoder("BAAI/bge-reranker-base", max_length=512)
+def rerank(question,chunks,top_k):
+    
+    scorable = [chunk for chunk in chunks if chunk.get("chunk_text")]
+    if not scorable:
+        return chunks[:top_k]
+
+    pairs = [(question, chunk["chunk_text"]) for chunk in scorable]
+    scores  = reranker.predict(pairs)
+    
+    for chunk, score in zip(scorable,scores):
+        chunk['rerank_scores'] = float(score)
+        
+    ranked = sorted(scorable, key=lambda chunk: chunk['rerank_scores'], reverse=True)
+    
+    return ranked[:top_k]
+
 def retrieve(question: str, run_config: dict, qdrant_client):
     """Retrieve chunks without building a prompt or calling a generation model."""
     retrieval_start = perf_counter()
     chunks, embedding_usage = fetch_context(
         question=question,
-        retrieval_k=run_config["retrieval_k"],
+        candidate_k=run_config["candidate_k"],
         embedding_model=run_config["embedding_model"],
         collection_name=run_config["collection_name"],
         qdrant_client=qdrant_client,
     )
+    
+    reranked_chunks = rerank(question,chunks,run_config['retrieval_k'])
+    
     retrieval_latency_ms = (perf_counter() - retrieval_start) * 1000
 
+    
     return {
         "User Question": question,
-        "Retrieved Chunk texts": chunks,
+        "Retrieved Chunk texts": reranked_chunks,
         "Similarity Scores": [
-            {"chunk_id": chunk["chunk_id"], "score": chunk["score"]}
-            for chunk in chunks
+            {
+                "chunk_id": chunk["chunk_id"],
+                "dense_score": chunk["score"],
+                "rerank_score": chunk.get("rerank_scores"),
+            }
+            for chunk in reranked_chunks
         ],
         "Latency": {
             "retrieval": retrieval_latency_ms,
@@ -122,6 +169,7 @@ def retrieve(question: str, run_config: dict, qdrant_client):
             "rag_total_tokens": embedding_usage.get("total_tokens"),
         },
     }
+
 
 
 def make_rag_messages(question, history, chunks, system_prompt: str):
