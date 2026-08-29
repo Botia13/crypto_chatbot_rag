@@ -22,7 +22,7 @@ BASELINE_RUN_CONFIG = {
 
     # Changing the values below will not make a new vector database (retrieval and ragas)
     # Retrieval / generation
-    "retrieval_k": 5,
+    "retrieval_k": 12,
     "candidate_k": 50,
     "generation_model": "openai/gpt-5.6-luna",
     "temperature": 0,
