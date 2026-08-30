@@ -110,7 +110,7 @@ def fetch_context(question: str,candidate_k: int,embedding_model: str,collection
     return chunks,embedding_usage
 
 
-reranker = CrossEncoder("BAAI/bge-reranker-base", max_length=512)
+reranker = CrossEncoder("BAAI/bge-reranker-v2-m3", max_length=1500)
 def rerank(question,chunks,top_k):
     
     scorable = [chunk for chunk in chunks if chunk.get("chunk_text")]
@@ -130,6 +130,7 @@ def rerank(question,chunks,top_k):
 def retrieve(question: str, run_config: dict, qdrant_client):
     """Retrieve chunks without building a prompt or calling a generation model."""
     retrieval_start = perf_counter()
+    
     chunks, embedding_usage = fetch_context(
         question=question,
         candidate_k=run_config["candidate_k"],
@@ -137,8 +138,11 @@ def retrieve(question: str, run_config: dict, qdrant_client):
         collection_name=run_config["collection_name"],
         qdrant_client=qdrant_client,
     )
-    
-    reranked_chunks = rerank(question,chunks,run_config['retrieval_k'])
+    rank = run_config['rerank']
+    if rank:
+        reranked_chunks = rerank(question,chunks,run_config['retrieval_k'])
+    else:
+        reranked_chunks = chunks[: run_config['retrieval_k']]
     
     retrieval_latency_ms = (perf_counter() - retrieval_start) * 1000
 
