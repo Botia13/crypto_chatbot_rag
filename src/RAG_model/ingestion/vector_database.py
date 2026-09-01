@@ -5,9 +5,12 @@ from qdrant_client.models import (
     MatchValue,
     PointStruct,
     VectorParams,
+    SparseVectorParams,
+    SparseVector,
+    Modifier
 )
 from uuid import uuid5, NAMESPACE_URL
-
+from fastembed import SparseTextEmbedding
 
 # Checks if the collection already exists
 def index_is_ready(
@@ -49,9 +52,7 @@ def create_qdrant_collection(qdrant_client, collection_name: str, vector_size: i
         collection_info = qdrant_client.get_collection(
             collection_name=collection_name
         )
-        existing_vector_size = (
-            collection_info.config.params.vectors.size
-        )
+        existing_vector_size = collection_info.config.params.vectors['dense'].size
         if existing_vector_size != vector_size:
             raise ValueError(
                 f"Collection '{collection_name}' expects vectors "
@@ -67,14 +68,14 @@ def create_qdrant_collection(qdrant_client, collection_name: str, vector_size: i
     # Create the collection and define the vector parameters (size and distance metric)
     qdrant_client.create_collection(
         collection_name = collection_name,
-        vectors_config = VectorParams(
-            size = vector_size,
-            distance = Distance.COSINE
-        )
+        vectors_config = {"dense":VectorParams(size = vector_size,distance = Distance.COSINE)},
+        sparse_vectors_config = {"bm25": SparseVectorParams(modifier=Modifier.IDF)}
+        
     )
     
     print(f"Created collection: {collection_name}")
 
+_bm25 = SparseTextEmbedding(model_name="Qdrant/bm25")
 # Generate a point format for each embedded chunk 
 def create_point(embedded_chunk):
         
@@ -109,9 +110,15 @@ def create_point(embedded_chunk):
     if embedded_chunk['table_id'] is not None:
         payload["table_id"] = embedded_chunk["table_id"]
         
+    sparse = next(_bm25.embed(embedded_chunk["chunk_text"]))
+        
     return PointStruct(
         id = point_id,
-        vector = embedded_chunk['embedding'],
+        vector = {
+            "dense":embedded_chunk['embedding'],
+            "bm25": SparseVector(indices = sparse.indices.tolist(),
+                                 values = sparse.values.tolist())
+        } ,       
         payload = payload
     )
 
