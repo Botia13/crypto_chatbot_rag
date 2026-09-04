@@ -1,14 +1,12 @@
 # config.py
-PIPELINE_VERSION = "v3"
+PIPELINE_VERSION = "v5"
 
 # The model to use to generate the answers
 BASELINE_RUN_CONFIG = {
     # Identity: saved with every experiment result
-    "experiment_name": "baseline_v1_3",
     "pipeline_version": PIPELINE_VERSION,
 
-    # Changing the below values will create a new vector database
-
+    ### Changing the below values will create a new vector database
     # Ingestion configuration: record it for reproducibility (Chunks and Embeddings)
     "chunk_size": 500,
     "chunk_overlap": 120,
@@ -18,12 +16,12 @@ BASELINE_RUN_CONFIG = {
     # Embeddings / vector collection
     "embedding_provider": "openrouter",
     "embedding_model": "openai/text-embedding-3-small",
-    "collection_name": (f"sec_filings_openai_text-embedding-3-small_{PIPELINE_VERSION}"),
 
-    # Changing the values below will not make a new vector database (retrieval and ragas)
+    ### Changing the values below will not make a new vector database (retrieval and ragas)
     # Retrieval / generation
-    "rerank": False,
-    "retrieval_k": 12,
+    "rerank": True,
+    "reranker_model": "BAAI/bge-reranker-v2-m3",
+    "retrieval_k": 15,
     "candidate_k": 50,
     "generation_model": "openai/gpt-5.6-luna",
     "temperature": 0,
@@ -38,6 +36,15 @@ BASELINE_RUN_CONFIG = {
 
 }
 
+
+embedding_label = BASELINE_RUN_CONFIG['embedding_model'].replace("/", "-").replace(":", "-")
+COLLECTION_NAME = (
+        f""
+        f"chunk-{BASELINE_RUN_CONFIG['chunk_size']}"
+        f"__overlap-{BASELINE_RUN_CONFIG['chunk_overlap']}"
+        f"__embedding-{embedding_label}"
+    )
+BASELINE_RUN_CONFIG["collection_name"] = COLLECTION_NAME
 
 OPENROUTER_BASE_URL = ("https://openrouter.ai/api/v1")
 

@@ -1,5 +1,7 @@
 import os
+import json
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from time import perf_counter
 import pandas as pd
 from openai import AsyncOpenAI
@@ -39,12 +41,14 @@ def print_progress(
 # Read the questions file 
 def load_evaluation_questions():
     root = Path.cwd()
-    while not (root / 'data' / 'rag_evaluation' / 'evaluation_questions_v2.csv').exists() and root.parent != root:
+    while not (root / 'data' / 'rag_evaluation' / 'evaluation_questions_v3.csv').exists() and root.parent != root:
         root = root.parent
 
-    csv_path = root / 'data' / 'rag_evaluation' / 'evaluation_questions_v2.csv'
+    csv_path = root / 'data' / 'rag_evaluation' / 'evaluation_questions_v3.csv'
 
     questions = pd.read_csv(csv_path)
+    questions['required_claims'] = questions['required_claims'].apply(json.loads)
+    questions['reference_evidence'] = questions['reference_evidence'].apply(json.loads)
     
     return questions
 
@@ -248,6 +252,8 @@ def evaluate_question_deterministic(
         "expected_document": expected_accession_number,
         "expected_documents": expected_documents,
         "reference_answer": question_record["reference_answer"],
+        "required_claims": question_record["required_claims"],
+        "reference_evidence": question_record["reference_evidence"],
         "category": question_record["category"],
         "difficulty": question_record["difficulty"],
         "evaluation_focus": question_record["evaluation_focus"],
@@ -382,10 +388,18 @@ async def evaluate_all_questions(
         
         question_results.append({
             "question_id": ragas_result["question_id"],
+            "question": ragas_result["question"],
+            "reference_answer": ragas_result["reference_answer"],
+            "answer": ragas_result["answer"],
+            "required_claims": ragas_result["required_claims"],
+            "reference_evidence": ragas_result["reference_evidence"],
             "category": ragas_result["category"],
             "difficulty": ragas_result["difficulty"],
             "answerable": ragas_result["answerable"],
             "expected_documents": ragas_result["expected_documents"],
+            "retrieved_chunks": ragas_result["retrieved_chunks"],
+            "citations": ragas_result["citations"],
+            "invalid_citations": ragas_result["invalid_citations"],
 
             "document_hit_at_k": ragas_result["document_hit_at_k"],
             "document_recall_at_k": ragas_result["document_recall_at_k"],
@@ -583,6 +597,7 @@ async def main(
             / "rag_evaluation"
             / "results"
             / run_config["experiment_name"]
+            / datetime.now(timezone.utc).strftime("%Y_%m_%d_%H%M")
         )
 
         if retrieval_only:
@@ -590,13 +605,23 @@ async def main(
 
         output_directory.mkdir(parents=True, exist_ok=True)
 
-        detailed_questions.to_csv(output_directory / "question_results.csv",index=False)
+        detailed_questions.to_json(
+            output_directory / "question_results.jsonl",
+            orient="records",
+            lines=True,
+            force_ascii=False,
+        )
 
         summary.to_csv(output_directory / "summary.csv",index=False,)
 
         metadata = pd.DataFrame([{
+            "run_id": datetime.now(timezone.utc).strftime("%Y_%m_%d_%H%M"),
             "experiment_name": run_config["experiment_name"],
             "pipeline_version": run_config["pipeline_version"],
+            "collection_name": run_config["collection_name"],
+            "chunk_size": run_config["chunk_size"],
+            "chunk_overlap": run_config["chunk_overlap"],
+            "reranking_enabled": run_config["rerank"],
             "retrieval_k": run_config["retrieval_k"],
             "embedding_model": run_config["embedding_model"],
             "generation_model": run_config.get("generation_model"),

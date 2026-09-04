@@ -110,7 +110,7 @@ def fetch_context(question: str,candidate_k: int,embedding_model: str,collection
     return chunks,embedding_usage
 
 
-reranker = CrossEncoder("BAAI/bge-reranker-v2-m3", max_length=1500)
+reranker = CrossEncoder(BASELINE_RUN_CONFIG["reranker_model"], max_length=1500)
 def rerank(question,chunks,top_k):
     
     scorable = [chunk for chunk in chunks if chunk.get("chunk_text")]
