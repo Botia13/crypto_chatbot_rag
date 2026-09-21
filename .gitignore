@@ -9,7 +9,7 @@ data/parquet_files/
 data/rag_evaluation/results/*
 !data/rag_evaluation/evaluation_questions_v4.csv
 outputs/evaluation-audit
-
+tests/
 
 # Jupyter
 .ipynb_checkpoints/
