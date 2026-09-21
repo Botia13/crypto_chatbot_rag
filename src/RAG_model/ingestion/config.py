@@ -1,11 +1,11 @@
 # config.py
 PIPELINE_VERSION = "v5"
-
+questions_file = 'evaluation_questions_v4.csv'
 # The model to use to generate the answers
 BASELINE_RUN_CONFIG = {
     # Identity: saved with every experiment result
     "pipeline_version": PIPELINE_VERSION,
-
+    "experiment_name": PIPELINE_VERSION,
     ### Changing the below values will create a new vector database
     # Ingestion configuration: record it for reproducibility (Chunks and Embeddings)
     "chunk_size": 500,
@@ -29,8 +29,8 @@ BASELINE_RUN_CONFIG = {
     
     # RAGAS paramaters
     "ragas_enabled": True,
-    "ragas_evaluator_model": "openai/gpt-4o-mini",
-    "answer_correct_threshold": 0.8,
+    "ragas_evaluator_model": "openai/gpt-5.6-terra",
+    "answer_correct_threshold": 0.7,
     "ragas_temperature": 0,
 
 

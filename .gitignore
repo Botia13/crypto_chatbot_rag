@@ -6,7 +6,8 @@ __pycache__/
 # Generated local data
 data/qdrant_storage/
 data/parquet_files/
-data/rag_evaluation/
+data/rag_evaluation/*
+!data/rag_evaluation/evaluation_questions_v4.csv
 outputs/evaluation-audit
 
 

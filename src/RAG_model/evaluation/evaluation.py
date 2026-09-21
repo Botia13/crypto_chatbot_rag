@@ -1,22 +1,48 @@
+from RAG_model.model_analysis_notebooks.utils.result_metrics import (
+    reciprocal_rank, mean_reciprocal_rank, normalize_accession_number,
+    parse_expected_documents, unique_ranked_documents, is_answerable,
+)
 import os
 import json
+import re
+import unicodedata
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from difflib import SequenceMatcher
 from time import perf_counter
 import pandas as pd
 from openai import AsyncOpenAI
 from ragas import SingleTurnSample
 from ragas.llms import llm_factory
 from ragas.metrics import Faithfulness,FactualCorrectness,LLMContextPrecisionWithReference
-from RAG_model.answer.answer import answer, retrieve
-from RAG_model.ingestion.config import BASELINE_RUN_CONFIG, OPENROUTER_BASE_URL, DB_PATH_NAME, SYSTEM_PROMPT
+from RAG_model.ingestion.config import BASELINE_RUN_CONFIG, OPENROUTER_BASE_URL, DB_PATH_NAME, SYSTEM_PROMPT, questions_file
 from RAG_model.ingestion.ingestion import ingestion
 from pathlib import Path
 from tqdm import tqdm
 from qdrant_client import QdrantClient
 
 
+def retrieve(*args, **kwargs):
+    # Importing evaluation helpers must not load BGE or initialize API clients.
+    from RAG_model.answer.answer import retrieve as implementation
+    return implementation(*args, **kwargs)
+
+
+def answer(*args, **kwargs):
+    from RAG_model.answer.answer import answer as implementation
+    return implementation(*args, **kwargs)
+
+
 _PREPARED_COLLECTIONS: set[tuple] = set()
+from RAG_model.model_analysis_notebooks.utils.evidence import (
+    CLAIM_EVIDENCE_MATCH_THRESHOLD,
+    EVIDENCE_METRIC_VERSION,
+    load_evaluation_questions,
+    normalize_evidence_tokens,
+    normalize_evidence_accession,
+    evidence_passage_coverage,
+    calculate_claim_evidence_recall,
+)
 
 
 def print_progress(
@@ -39,81 +65,18 @@ def print_progress(
 
 
 # Read the questions file 
-def load_evaluation_questions():
-    root = Path.cwd()
-    while not (root / 'data' / 'rag_evaluation' / 'evaluation_questions_v3.csv').exists() and root.parent != root:
-        root = root.parent
-
-    csv_path = root / 'data' / 'rag_evaluation' / 'evaluation_questions_v3.csv'
-
-    questions = pd.read_csv(csv_path)
-    questions['required_claims'] = questions['required_claims'].apply(json.loads)
-    questions['reference_evidence'] = questions['reference_evidence'].apply(json.loads)
-    
-    return questions
-
 # Create evaluator LLM
-def create_ragas_metrics(run_config):
-    ragas_client = AsyncOpenAI(api_key=os.environ["OPENROUTER_API_KEY"], base_url=OPENROUTER_BASE_URL, timeout=60.0 , max_retries = 5 )
-    ragas_llm = llm_factory(run_config['ragas_evaluator_model'],provider="openai", client = ragas_client, max_tokens = 8192, temperature=run_config["ragas_temperature"])
-
-    # Create metric Objects
-    metrics = {
-        "faithfulness_metric": Faithfulness(llm=ragas_llm),
-        "factual_correctness_metric": FactualCorrectness(llm=ragas_llm,mode="f1"),
-        "context_precision_metric":LLMContextPrecisionWithReference(llm=ragas_llm)}
-    
-    return ragas_client, metrics
+from RAG_model.model_analysis_notebooks.utils.ragas_factory import create_ragas_metrics
         
     
 # Helper Functions 
 
-def reciprocal_rank (retrieved_accession_numbers, expected_accession_number):
-    """ 
-    Return 1/rank for the first relevant retrieved result.
-    Rank starts at 1, return 0 if it was not retrieved
-    """
-    
-    for rank, accesion_number in enumerate(retrieved_accession_numbers,start=1):
-        if accesion_number==expected_accession_number:
-            return 1/rank
-
-    return 0.0
 
 
-def mean_reciprocal_rank(
-    retrieved_accession_numbers: list[str],
-    expected_accession_numbers: list[str],
-) -> float:
-    """Average reciprocal rank across every document required by a question."""
-    if not expected_accession_numbers:
-        return 0.0
-    return sum(
-        reciprocal_rank(retrieved_accession_numbers, expected)
-        for expected in expected_accession_numbers
-    ) / len(expected_accession_numbers)
 
 
-def normalize_accession_number(value) -> str:
-    """Normalize IDs read from CSV/Qdrant before metric comparison."""
-    if value is None or pd.isna(value):
-        return ""
-    return str(value).strip().lower()
 
 
-def parse_expected_documents(value) -> list[str]:
-    """Parse one or more semicolon-delimited expected accession numbers."""
-    if isinstance(value, (list, tuple, set)):
-        raw_values = value
-    else:
-        if value is None or pd.isna(value):
-            return []
-        raw_values = str(value).split(";")
-    return [
-        normalized
-        for item in raw_values
-        if (normalized := normalize_accession_number(item))
-    ]
 
 
 def normalize_run_config(run_config) -> dict:
@@ -129,27 +92,8 @@ def normalize_run_config(run_config) -> dict:
     )
 
 
-def unique_ranked_documents(retrieved_accession_numbers) -> list[str]:
-    """Collapse repeated chunks while preserving document retrieval order."""
-    return list(dict.fromkeys(
-        normalized
-        for value in retrieved_accession_numbers
-        if (normalized := normalize_accession_number(value))
-    ))
 
 
-def is_answerable(value) -> bool:
-    """Convert CSV and Python boolean representations without truthy strings."""
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"true", "1", "yes"}:
-            return True
-        if normalized in {"false", "0", "no", ""}:
-            return False
-        raise ValueError(f"Unknown answerable value: {value!r}")
-    if value is None or pd.isna(value):
-        return False
-    return bool(value)
 
 
 def prepare_vector_index(run_config: dict) -> None:
@@ -226,6 +170,15 @@ def evaluate_question_deterministic(
         retrieval = None
         document_recall = None
         mrr = None
+
+    if answerable:
+        claim_evidence_recall = calculate_claim_evidence_recall(
+            required_claims=question_record.get("required_claims", []),
+            reference_evidence=question_record.get("reference_evidence", []),
+            retrieved_chunks=chunks,
+        )
+    else:
+        claim_evidence_recall = None
         
     # Citation validity: Each citation was actually retrieved 
     invalid_citation  = [ citation for citation in cited_chunk_ids if citation not in retrieved_chunk_ids]
@@ -252,8 +205,8 @@ def evaluate_question_deterministic(
         "expected_document": expected_accession_number,
         "expected_documents": expected_documents,
         "reference_answer": question_record["reference_answer"],
-        "required_claims": question_record["required_claims"],
-        "reference_evidence": question_record["reference_evidence"],
+        "required_claims": question_record.get("required_claims", []),
+        "reference_evidence": question_record.get("reference_evidence", []),
         "category": question_record["category"],
         "difficulty": question_record["difficulty"],
         "evaluation_focus": question_record["evaluation_focus"],
@@ -277,6 +230,13 @@ def evaluate_question_deterministic(
         "document_hit_at_k": retrieval,
         "document_recall_at_k": document_recall,
         "reciprocal_rank": mrr,
+        "claim_evidence_recall_at_k": claim_evidence_recall,
+        "claim_evidence_metric_version": EVIDENCE_METRIC_VERSION,
+        "legacy_claim_evidence_recall_at_k": (
+            calculate_claim_evidence_recall(question_record.get("required_claims", []),
+                question_record.get("reference_evidence", []), chunks, allow_adjacent=False)
+            if answerable else None
+        ),
 
         # Deterministic citation metrics
         "citations": cited_chunk_ids,
@@ -404,6 +364,9 @@ async def evaluate_all_questions(
             "document_hit_at_k": ragas_result["document_hit_at_k"],
             "document_recall_at_k": ragas_result["document_recall_at_k"],
             "reciprocal_rank": ragas_result["reciprocal_rank"],
+            "claim_evidence_recall_at_k": ragas_result["claim_evidence_recall_at_k"],
+            "legacy_claim_evidence_recall_at_k": ragas_result["legacy_claim_evidence_recall_at_k"],
+            "claim_evidence_metric_version": ragas_result["claim_evidence_metric_version"],
             "retrieved_chunk_ids": ragas_result["retrieved_chunk_ids"],
             "retrieved_accession_numbers": ragas_result[
                 "retrieved_accession_numbers"
