@@ -19,10 +19,10 @@ BASELINE_RUN_CONFIG = {
 
     ### Changing the values below will not make a new vector database (retrieval and ragas)
     # Retrieval / generation
-    "rerank": True,
+    "rerank": False,
     "reranker_model": "BAAI/bge-reranker-v2-m3",
-    "retrieval_k": 15,
-    "candidate_k": 50,
+    "retrieval_k": 20,
+    "candidate_k": 20,
     "generation_model": "openai/gpt-5.6-luna",
     "temperature": 0,
     "prompt_version": "v2",
@@ -39,9 +39,10 @@ BASELINE_RUN_CONFIG = {
 
 embedding_label = BASELINE_RUN_CONFIG['embedding_model'].replace("/", "-").replace(":", "-")
 COLLECTION_NAME = (
-        f""
-        f"chunk-{BASELINE_RUN_CONFIG['chunk_size']}"
+        f"sec_filings"
+        f"__chunk-{BASELINE_RUN_CONFIG['chunk_size']}"
         f"__overlap-{BASELINE_RUN_CONFIG['chunk_overlap']}"
+        f"__encoding-{BASELINE_RUN_CONFIG['encoding_name']}"
         f"__embedding-{embedding_label}"
     )
 BASELINE_RUN_CONFIG["collection_name"] = COLLECTION_NAME

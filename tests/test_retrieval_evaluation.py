@@ -1,8 +1,11 @@
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
+import RAG_model.answer.answer as answer_module
 from RAG_model.evaluation import evaluation
+from RAG_model.ingestion.config import BASELINE_RUN_CONFIG
 from RAG_model.ingestion.embedding import create_embeddings
 from RAG_model.ingestion.vector_database import index_is_ready
 
@@ -280,3 +283,240 @@ def test_notebook_config_object_is_accepted():
         "collection_name": "index",
         "retrieval_k": 5,
     }
+
+
+class ListVector(list):
+    def tolist(self):
+        return list(self)
+
+
+class FakeRetrievalEmbeddingClient:
+    def __init__(self):
+        self.calls = []
+        self.embeddings = self
+
+    def create(self, *, model, input):
+        self.calls.append({"model": model, "input": input})
+        return SimpleNamespace(
+            data=[SimpleNamespace(embedding=[0.1, 0.2])],
+            usage=SimpleNamespace(prompt_tokens=7, total_tokens=7),
+        )
+
+
+class FakeBm25:
+    def __init__(self):
+        self.calls = []
+
+    def embed(self, text):
+        self.calls.append(text)
+        yield SimpleNamespace(
+            indices=ListVector([1, 2]),
+            values=ListVector([0.4, 0.6]),
+        )
+
+
+class FakeQdrant:
+    def __init__(self, *, result_groups=(), catalog=()):
+        self.result_groups = list(result_groups)
+        self.catalog = list(catalog)
+        self.query_calls = []
+        self.scroll_calls = []
+
+    def query_points(self, **kwargs):
+        self.query_calls.append(kwargs)
+        payloads = self.result_groups[len(self.query_calls) - 1]
+        return SimpleNamespace(
+            points=[
+                SimpleNamespace(payload=payload, score=1.0 - index / 100)
+                for index, payload in enumerate(payloads)
+            ]
+        )
+
+    def scroll(self, **kwargs):
+        self.scroll_calls.append(kwargs)
+        return [SimpleNamespace(payload=payload) for payload in self.catalog], None
+
+
+def retrieval_chunk(
+    chunk_id,
+    ticker,
+    *,
+    form_type="10-K",
+    period_end="2024-12-31",
+):
+    return {
+        "chunk_id": chunk_id,
+        "accession_number": f"accession-{ticker.lower()}",
+        "chunk_text": f"Content for {chunk_id}",
+        "ticker": ticker,
+        "form_type": form_type,
+        "filing_date": "2025-03-20",
+        "period_end": period_end,
+        "chunk_title": "Business",
+        "source_url": "https://www.sec.gov/example",
+        "section_type": "item",
+        "section_part": None,
+        "section_key": "item-1",
+        "table_type": None,
+        "table_title": None,
+    }
+
+
+@pytest.fixture
+def fake_retrieval_models(monkeypatch):
+    embedding_client = FakeRetrievalEmbeddingClient()
+    bm25 = FakeBm25()
+    monkeypatch.setattr(answer_module, "client", embedding_client)
+    monkeypatch.setattr(answer_module, "_bm25", bm25)
+    return embedding_client, bm25
+
+
+def test_single_scope_filters_both_prefetches_and_fusion(fake_retrieval_models):
+    client = FakeQdrant(result_groups=[[retrieval_chunk("feth-1", "FETH")]])
+    question = (
+        "What is FETH's Sponsor Fee?\n"
+        "Source scope: FETH 10-K for the reporting period ending 2024-12-31."
+    )
+
+    chunks, usage = answer_module.fetch_context(
+        question, 20, "embedding-model", "collection", client
+    )
+
+    assert [item["chunk_id"] for item in chunks] == ["feth-1"]
+    assert chunks[0]["form_type"] == "10-K"
+    assert chunks[0]["period_end"] == "2024-12-31"
+    assert usage == {"input_tokens": 7, "total_tokens": 7}
+    assert len(client.query_calls) == 1
+    call = client.query_calls[0]
+    assert call["limit"] == 20
+    assert all(prefetch.limit == 20 for prefetch in call["prefetch"])
+    assert all(
+        prefetch.filter == call["query_filter"] for prefetch in call["prefetch"]
+    )
+    serialized_filter = str(call["query_filter"])
+    for expected in (
+        "ticker", "FETH", "form_type", "10-K", "period_end", "2024-12-31"
+    ):
+        assert expected in serialized_filter
+    assert len(fake_retrieval_models[0].calls) == 1
+    assert fake_retrieval_models[1].calls == [question]
+
+
+def test_multi_ticker_searches_share_embedding_and_merge_round_robin(
+    fake_retrieval_models,
+):
+    client = FakeQdrant(result_groups=[
+        [retrieval_chunk("feth-1", "FETH"), retrieval_chunk("feth-2", "FETH")],
+        [retrieval_chunk("fbtc-1", "FBTC"), retrieval_chunk("fbtc-2", "FBTC")],
+    ])
+    question = (
+        "Compare FETH and FBTC Sponsor Fees.\n"
+        "Source scope: FETH 10-K for the reporting period ending 2024-12-31; "
+        "FBTC 10-K for the reporting period ending 2024-12-31."
+    )
+
+    chunks, _ = answer_module.fetch_context(
+        question, 20, "embedding-model", "collection", client
+    )
+
+    assert [item["chunk_id"] for item in chunks] == [
+        "feth-1", "fbtc-1", "feth-2", "fbtc-2"
+    ]
+    assert [call["limit"] for call in client.query_calls] == [10, 10]
+    assert len(fake_retrieval_models[0].calls) == 1
+    assert fake_retrieval_models[1].calls == [question]
+
+
+def test_duplicate_chunk_ids_keep_the_first_occurrence(fake_retrieval_models):
+    repeated = retrieval_chunk("feth-1", "FETH")
+    client = FakeQdrant(result_groups=[[
+        repeated,
+        {**repeated, "chunk_text": "Duplicate copy"},
+        retrieval_chunk("feth-2", "FETH"),
+    ]])
+    question = (
+        "What is FETH's Sponsor Fee?\n"
+        "Source scope: FETH 10-K for the reporting period ending 2024-12-31."
+    )
+
+    chunks, _ = answer_module.fetch_context(
+        question, 20, "embedding-model", "collection", client
+    )
+
+    assert [item["chunk_id"] for item in chunks] == ["feth-1", "feth-2"]
+    assert chunks[0]["chunk_text"] == "Content for feth-1"
+
+
+def test_missing_filing_skips_embedding_and_search(fake_retrieval_models):
+    client = FakeQdrant(catalog=[retrieval_chunk("historical", "FBTC")])
+
+    chunks, usage = answer_module.fetch_context(
+        "What was FBTC's balance sheet for Q2 2028?",
+        20,
+        "embedding-model",
+        "collection",
+        client,
+    )
+
+    assert chunks == []
+    assert usage == {"input_tokens": 0, "total_tokens": 0}
+    assert len(client.scroll_calls) == 1
+    assert client.query_calls == []
+    assert fake_retrieval_models[0].calls == []
+    assert fake_retrieval_models[1].calls == []
+
+
+def test_scope_violation_fails_instead_of_leaking_wrong_filing(
+    fake_retrieval_models,
+):
+    client = FakeQdrant(result_groups=[[retrieval_chunk("wrong-1", "FBTC")]])
+    question = (
+        "What is FETH's Sponsor Fee?\n"
+        "Source scope: FETH 10-K for the reporting period ending 2024-12-31."
+    )
+
+    with pytest.raises(AssertionError, match="Filter violation"):
+        answer_module.fetch_context(
+            question, 20, "embedding-model", "collection", client
+        )
+
+
+def test_raw_retrieval_preserves_order_without_calling_reranker(monkeypatch):
+    expected = [
+        {"chunk_id": "first", "score": 0.8},
+        {"chunk_id": "second", "score": 0.7},
+    ]
+    monkeypatch.setattr(
+        answer_module,
+        "fetch_context",
+        lambda *args, **kwargs: (expected, {"input_tokens": 2, "total_tokens": 2}),
+    )
+    monkeypatch.setattr(
+        answer_module,
+        "rerank",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("reranker must remain inactive")
+        ),
+    )
+    config = {
+        "candidate_k": 20,
+        "retrieval_k": 20,
+        "embedding_model": "embedding-model",
+        "collection_name": "collection",
+        "rerank": False,
+    }
+
+    result = answer_module.retrieve("question", config, object())
+
+    assert result["Retrieved Chunk texts"] == expected
+    assert result["Similarity Scores"] == [
+        {"chunk_id": "first", "hybrid_score": 0.8, "rerank_score": None},
+        {"chunk_id": "second", "hybrid_score": 0.7, "rerank_score": None},
+    ]
+
+
+def test_baseline_uses_the_existing_experiment_collection():
+    assert BASELINE_RUN_CONFIG["collection_name"] == (
+        "sec_filings__chunk-500__overlap-120__encoding-cl100k_base__"
+        "embedding-openai-text-embedding-3-small"
+    )

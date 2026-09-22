@@ -1,4 +1,5 @@
 import re
+from math import ceil
 from RAG_model.ingestion.embedding import create_openrouter_client
 from qdrant_client import QdrantClient
 from time import perf_counter
@@ -14,6 +15,16 @@ from tenacity import (
 from sentence_transformers import CrossEncoder
 from qdrant_client import models          
 from fastembed import SparseTextEmbedding  
+from RAG_model.model_analysis_notebooks.utils.full_benchmark import (
+    question_constraints,
+    resolve_searches,
+)
+from RAG_model.model_analysis_notebooks.utils.retrieval_benchmark import (
+    assert_scope,
+    deduplicate,
+    make_filter,
+    round_robin,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -60,59 +71,137 @@ def generate_response(messages, run_config: dict):
 
     return response
 
+def load_filing_catalog(qdrant_client, collection_name: str) -> list[dict]:
+    """Return one metadata record per filing stored in the collection.
+
+    Users describe filings with phrases such as "2024 annual filing", while
+    retrieval filters need exact values such as ``10-K`` and ``2024-12-31``.
+    The catalog provides that mapping without loading vectors or chunk text.
+    """
+    fields = ["ticker", "form_type", "period_end", "accession_number"]
+    filings = {}
+    offset = None
+
+    while True:
+        points, offset = qdrant_client.scroll(
+            collection_name=collection_name,
+            limit=256,
+            offset=offset,
+            with_payload=fields,
+            with_vectors=False,
+        )
+        for point in points:
+            payload = point.payload or {}
+            if not all(payload.get(field) for field in fields):
+                raise ValueError("Indexed filing is missing required scope metadata.")
+
+            filing = {field: payload[field] for field in fields}
+            accession = filing["accession_number"]
+            previous = filings.setdefault(accession, filing)
+            if previous != filing:
+                raise ValueError(
+                    f"Conflicting scope metadata for accession {accession}."
+                )
+
+        if offset is None:
+            break
+
+    return list(filings.values())
+
+
 def fetch_context(question: str,candidate_k: int,embedding_model: str,collection_name: str, qdrant_client):
-    
+    """Retrieve a balanced, metadata-filtered hybrid candidate pool.
+
+    The question is resolved to concrete filing scopes before one dense and
+    BM25 query is reused across ticker-specific searches. Results retain the
+    raw hybrid order, are interleaved across tickers, deduplicated, and capped
+    at ``candidate_k`` without unrelated backfill.
+    """
+    constraints = question_constraints(question)
+    catalog = (
+        []
+        if constraints["mode"] == "explicit_scope"
+        else load_filing_catalog(qdrant_client, collection_name)
+    )
+    search_entries = resolve_searches(constraints, catalog)
+
+    if not any(not entry["empty"] for entry in search_entries):
+        return [], {"input_tokens": 0, "total_tokens": 0}
+
     embedding_response = client.embeddings.create(model=embedding_model,input=[question])
     dense_q = embedding_response.data[0].embedding
-    
     sparse_q = next(_bm25.embed(question))
+    per_search_limit = ceil(candidate_k / len(search_entries))
 
-    results = qdrant_client.query_points(
-        collection_name=collection_name,
-        prefetch=[
-            models.Prefetch(query=dense_q, using="dense", limit=candidate_k),
-            models.Prefetch(
-                query=models.SparseVector(
-                    indices=sparse_q.indices.tolist(),
-                    values=sparse_q.values.tolist(),
+    groups = []
+    for entry in search_entries:
+        if entry["empty"]:
+            groups.append([])
+            continue
+
+        # Filtering both prefetches prevents irrelevant points from consuming
+        # their limits; the final filter also protects the fused RRF output.
+        query_filter = make_filter(entry["spec"])
+        results = qdrant_client.query_points(
+            collection_name=collection_name,
+            prefetch=[
+                models.Prefetch(
+                    query=dense_q,
+                    using="dense",
+                    limit=per_search_limit,
+                    filter=query_filter,
                 ),
-                using="bm25",
-                limit=candidate_k,
-            ),
-        ],
-        query=models.FusionQuery(fusion=models.Fusion.RRF),
-        limit=candidate_k,
-        with_payload=True,
-    )
-    
-    chunks = []
-    for point in results.points:
-        payload = point.payload or {}
-        chunks.append({
-            "chunk_id": payload.get("chunk_id"),
-            "accession_number": payload.get("accession_number"),
-            "chunk_text": payload.get("chunk_text"),
-            "ticker": payload.get("ticker"),
-            "filing_date": payload.get("filing_date"),
-            "section_title": payload.get("chunk_title"),
-            "source_url": payload.get("source_url"),
-            "score": point.score,
-            "section_type": payload.get("section_type", "item"),
-            "section_part": payload.get("section_part"),
-            "section_key": payload.get("section_key"),
-            "table_type": payload.get("table_type"),
-            "table_title": payload.get("table_title")
-        })
-    
+                models.Prefetch(
+                    query=models.SparseVector(
+                        indices=sparse_q.indices.tolist(),
+                        values=sparse_q.values.tolist(),
+                    ),
+                    using="bm25",
+                    limit=per_search_limit,
+                    filter=query_filter,
+                ),
+            ],
+            query=models.FusionQuery(fusion=models.Fusion.RRF),
+            query_filter=query_filter,
+            limit=per_search_limit,
+            with_payload=True,
+        )
+
+        chunks = []
+        for point in results.points:
+            payload = point.payload or {}
+            chunks.append({
+                "chunk_id": payload.get("chunk_id"),
+                "accession_number": payload.get("accession_number"),
+                "chunk_text": payload.get("chunk_text"),
+                "ticker": payload.get("ticker"),
+                "form_type": payload.get("form_type"),
+                "filing_date": payload.get("filing_date"),
+                "period_end": payload.get("period_end"),
+                "section_title": payload.get("section_title") or payload.get("chunk_title"),
+                "source_url": payload.get("source_url"),
+                "score": float(point.score),
+                "section_type": payload.get("section_type", "item"),
+                "section_part": payload.get("section_part"),
+                "section_key": payload.get("section_key"),
+                "table_type": payload.get("table_type"),
+                "table_title": payload.get("table_title")
+            })
+
+        assert_scope(chunks, entry["spec"])
+        groups.append(chunks)
+
+    chunks = deduplicate(round_robin(groups), candidate_k)
     embedding_usage = {"input_tokens": embedding_response.usage.prompt_tokens,
                          "total_tokens": embedding_response.usage.total_tokens}
-    
+
     return chunks,embedding_usage
 
 
-reranker = CrossEncoder(BASELINE_RUN_CONFIG["reranker_model"], max_length=1500)
 def rerank(question,chunks,top_k):
-    
+    """Optionally reorder retrieved chunks with the configured cross-encoder."""
+    reranker = CrossEncoder(BASELINE_RUN_CONFIG["reranker_model"], max_length=1500)
+
     scorable = [chunk for chunk in chunks if chunk.get("chunk_text")]
     if not scorable:
         return chunks[:top_k]
@@ -128,7 +217,7 @@ def rerank(question,chunks,top_k):
     return ranked[:top_k]
 
 def retrieve(question: str, run_config: dict, qdrant_client):
-    """Retrieve chunks without building a prompt or calling a generation model."""
+    """Retrieve and optionally rerank context without generating an answer."""
     retrieval_start = perf_counter()
     
     chunks, embedding_usage = fetch_context(
@@ -138,25 +227,24 @@ def retrieve(question: str, run_config: dict, qdrant_client):
         collection_name=run_config["collection_name"],
         qdrant_client=qdrant_client,
     )
-    rank = run_config['rerank']
-    if rank:
-        reranked_chunks = rerank(question,chunks,run_config['retrieval_k'])
+    if run_config['rerank']:
+        selected_chunks = rerank(question,chunks,run_config['retrieval_k'])
     else:
-        reranked_chunks = chunks[: run_config['retrieval_k']]
+        selected_chunks = chunks[: run_config['retrieval_k']]
     
     retrieval_latency_ms = (perf_counter() - retrieval_start) * 1000
 
     
     return {
         "User Question": question,
-        "Retrieved Chunk texts": reranked_chunks,
+        "Retrieved Chunk texts": selected_chunks,
         "Similarity Scores": [
             {
                 "chunk_id": chunk["chunk_id"],
-                "dense_score": chunk["score"],
+                "hybrid_score": chunk["score"],
                 "rerank_score": chunk.get("rerank_scores"),
             }
-            for chunk in reranked_chunks
+            for chunk in selected_chunks
         ],
         "Latency": {
             "retrieval": retrieval_latency_ms,
