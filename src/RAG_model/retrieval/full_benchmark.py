@@ -19,13 +19,14 @@ from pathlib import Path
 import pandas as pd
 
 from RAG_model.answer.prompt import make_rag_messages
-from RAG_model.model_analysis_notebooks.utils import evidence, result_metrics, ragas_factory
-from RAG_model.model_analysis_notebooks.utils.result_metrics import is_answerable, score_answer
-from RAG_model.model_analysis_notebooks.utils.retrieval_benchmark import (
+from RAG_model.retrieval import result_metrics
+from RAG_model.retrieval.result_metrics import is_answerable, score_answer
+from RAG_model.retrieval.retrieval_benchmark import (
     Benchmark, LocalBackend, DiskCache, DEFAULT_SETTINGS, COLLECTION, atomic_json,
     digest, source_scope, filter_spec, assert_scope, round_robin, deduplicate, metadata_passage,
 )
 from RAG_model.ingestion.config import BASELINE_RUN_CONFIG, SYSTEM_PROMPT
+from RAG_model.retrieval import evidence, ragas_factory
 
 VARIANTS = tuple({'variant': f'direct_{k}_{"reranked" if rank else "raw"}',
                   'candidate_cap': k, 'rerank': rank}

@@ -1,7 +1,7 @@
 """Pure deterministic result metrics; no model, client, or ingestion imports."""
 import re
 import pandas as pd
-from RAG_model.model_analysis_notebooks.utils.evidence import evaluate_claim_evidence
+from RAG_model.retrieval.evidence import evaluate_claim_evidence
 
 ABSTENTION = "I could not find enough evidence in the retrieved SEC filings."
 

@@ -12,14 +12,13 @@ from tenacity import (
     stop_after_attempt,
     wait_exponential,
 )
-from sentence_transformers import CrossEncoder
 from qdrant_client import models          
 from fastembed import SparseTextEmbedding  
-from RAG_model.model_analysis_notebooks.utils.full_benchmark import (
+from RAG_model.retrieval.full_benchmark import (
     question_constraints,
     resolve_searches,
 )
-from RAG_model.model_analysis_notebooks.utils.retrieval_benchmark import (
+from RAG_model.retrieval.retrieval_benchmark import (
     assert_scope,
     deduplicate,
     make_filter,
@@ -32,7 +31,6 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 
 
-client = create_openrouter_client()
 _bm25 = SparseTextEmbedding(model_name="Qdrant/bm25") 
 
 
@@ -47,9 +45,9 @@ class EmptyGenerationResponseError(RuntimeError):
     reraise=True,
 )
 
-def generate_response(messages, run_config: dict):
+def generate_response(messages, run_config: dict, provider_client):
     """Generate an answer and retry a transient empty provider response."""
-    response = client.chat.completions.create(
+    response = provider_client.chat.completions.create(
         model=run_config["generation_model"],
         messages=messages,
         temperature=run_config["temperature"],
@@ -109,7 +107,7 @@ def load_filing_catalog(qdrant_client, collection_name: str) -> list[dict]:
     return list(filings.values())
 
 
-def fetch_context(question: str,candidate_k: int,embedding_model: str,collection_name: str, qdrant_client):
+def fetch_context(question: str,candidate_k: int,embedding_model: str,collection_name: str, qdrant_client,provider_client):
     """Retrieve a balanced, metadata-filtered hybrid candidate pool.
 
     The question is resolved to concrete filing scopes before one dense and
@@ -128,7 +126,7 @@ def fetch_context(question: str,candidate_k: int,embedding_model: str,collection
     if not any(not entry["empty"] for entry in search_entries):
         return [], {"input_tokens": 0, "total_tokens": 0}
 
-    embedding_response = client.embeddings.create(model=embedding_model,input=[question])
+    embedding_response = provider_client.embeddings.create(model=embedding_model,input=[question])
     dense_q = embedding_response.data[0].embedding
     sparse_q = next(_bm25.embed(question))
     per_search_limit = ceil(candidate_k / len(search_entries))
@@ -198,9 +196,11 @@ def fetch_context(question: str,candidate_k: int,embedding_model: str,collection
     return chunks,embedding_usage
 
 
-def rerank(question,chunks,top_k):
+def rerank(question,chunks,top_k,run_config):
     """Optionally reorder retrieved chunks with the configured cross-encoder."""
-    reranker = CrossEncoder(BASELINE_RUN_CONFIG["reranker_model"], max_length=1500)
+    from sentence_transformers import CrossEncoder
+
+    reranker = CrossEncoder(run_config["reranker_model"], max_length=1500)
 
     scorable = [chunk for chunk in chunks if chunk.get("chunk_text")]
     if not scorable:
@@ -216,7 +216,7 @@ def rerank(question,chunks,top_k):
     
     return ranked[:top_k]
 
-def retrieve(question: str, run_config: dict, qdrant_client):
+def retrieve(question: str, run_config: dict, qdrant_client, provider_client):
     """Retrieve and optionally rerank context without generating an answer."""
     retrieval_start = perf_counter()
     
@@ -226,9 +226,10 @@ def retrieve(question: str, run_config: dict, qdrant_client):
         embedding_model=run_config["embedding_model"],
         collection_name=run_config["collection_name"],
         qdrant_client=qdrant_client,
+        provider_client=provider_client
     )
     if run_config['rerank']:
-        selected_chunks = rerank(question,chunks,run_config['retrieval_k'])
+        selected_chunks = rerank(question,chunks,run_config['retrieval_k'],run_config)
     else:
         selected_chunks = chunks[: run_config['retrieval_k']]
     
@@ -329,6 +330,7 @@ def answer_from_chunks(
     question: str,
     chunks,
     run_config: dict,
+    provider_client,
     system_prompt: str = SYSTEM_PROMPT,
     history: list[dict] | None = None,
 ):
@@ -341,7 +343,7 @@ def answer_from_chunks(
     prompt_end = perf_counter()
     
     generation_start = perf_counter()
-    response = generate_response(messages, run_config)
+    response = generate_response(messages, run_config, provider_client)
     generation_end = perf_counter()
     
     usage = response.usage
@@ -374,6 +376,7 @@ def answer_from_chunks(
 def answer(
     question,
     run_config,
+    provider_client,
     system_prompt: str = SYSTEM_PROMPT,
     qdrant_client=None,
     history=None,
@@ -381,13 +384,16 @@ def answer(
     if qdrant_client is None:
         raise ValueError("A Qdrant client is required to answer a question.")
 
-    retrieval_result = retrieve(question, run_config, qdrant_client)
+    retrieval_result = retrieve(
+        question, run_config, qdrant_client, provider_client
+    )
     chunks = retrieval_result["Retrieved Chunk texts"]
 
     generation_result = answer_from_chunks(
         question=question,
         chunks=chunks,
         run_config=run_config,
+        provider_client=provider_client,
         history=history,
         system_prompt=system_prompt
     )
@@ -409,14 +415,19 @@ def main(system_prompt: str = SYSTEM_PROMPT) -> None:
     if not question:
         raise SystemExit("A question is required.")
     qdrant_client = QdrantClient(path=str(DB_PATH_NAME))
+    provider_client = create_openrouter_client()
     try:
-        result = answer(question, BASELINE_RUN_CONFIG,system_prompt,qdrant_client)
+        result = answer(
+            question,
+            BASELINE_RUN_CONFIG,
+            provider_client=provider_client,
+            system_prompt=system_prompt,
+            qdrant_client=qdrant_client,
+        )
         print("\nAnswer:\n", result["Answer"])
     finally:
         qdrant_client.close()
+        provider_client.close()
     
 if __name__ == "__main__":
-    try:
-        main(SYSTEM_PROMPT)
-    finally:
-        client.close()
+    main(SYSTEM_PROMPT)

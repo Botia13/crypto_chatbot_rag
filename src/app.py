@@ -2,6 +2,7 @@ import gradio as gr
 
 from RAG_model.answer.answer import answer
 from RAG_model.ingestion.config import BASELINE_RUN_CONFIG,DB_PATH_NAME
+from RAG_model.ingestion.embedding import create_openrouter_client
 from qdrant_client import QdrantClient
 
 
@@ -34,9 +35,17 @@ def ask_question(question: str, history: list[dict] | None):
         return "", history, "*Enter a question first.*", {}
 
     qdrant_client = None
+    provider_client = None
     try:
         qdrant_client = QdrantClient(path=str(DB_PATH_NAME))
-        result = answer(question, run_config=BASELINE_RUN_CONFIG,qdrant_client=qdrant_client,history=history)
+        provider_client = create_openrouter_client()
+        result = answer(
+            question,
+            run_config=BASELINE_RUN_CONFIG,
+            provider_client=provider_client,
+            qdrant_client=qdrant_client,
+            history=history,
+        )
     except Exception as error:
         error_message = "I could not complete the request. Check the terminal for details."
         updated_history = history + [
@@ -47,6 +56,8 @@ def ask_question(question: str, history: list[dict] | None):
     finally:
         if qdrant_client is not None:
             qdrant_client.close()
+        if provider_client is not None:
+            provider_client.close()
 
     updated_history = history + [
         {"role": "user", "content": question},

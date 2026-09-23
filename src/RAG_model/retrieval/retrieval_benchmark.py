@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from RAG_model.model_analysis_notebooks.utils.evidence import (
+from RAG_model.retrieval.evidence import (
     EVIDENCE_METRIC_VERSION, evaluate_claim_evidence, load_evaluation_questions,
     normalize_evidence_accession,
 )

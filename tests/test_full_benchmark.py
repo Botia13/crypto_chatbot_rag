@@ -8,9 +8,9 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from RAG_model.model_analysis_notebooks.utils import full_benchmark as fb
-from RAG_model.model_analysis_notebooks.utils.evidence import load_evaluation_questions
-from RAG_model.model_analysis_notebooks.utils.result_metrics import score_answer, ABSTENTION
+from RAG_model.retrieval import full_benchmark as fb
+from RAG_model.retrieval.evidence import load_evaluation_questions
+from RAG_model.retrieval.result_metrics import score_answer, ABSTENTION
 
 ROOT = Path(__file__).resolve().parents[1]
 TAG = 'experiment3_full_evaluation'
@@ -374,7 +374,7 @@ def test_fresh_kernel_only_new_section_then_cache_replay(tmp_path):
 import sys, runpy
 from pathlib import Path
 sys.path.insert(0, {str(ROOT/'src')!r})
-from RAG_model.model_analysis_notebooks.utils import full_benchmark as fb
+from RAG_model.retrieval import full_benchmark as fb
 FakeBackend = runpy.run_path({str(Path(__file__).resolve())!r})['FakeBackend']
 original = fb.FullBenchmark
 fake = FakeBackend()

@@ -7,10 +7,10 @@ import pandas as pd
 import pytest
 from qdrant_client import QdrantClient, models as m
 
-from RAG_model.model_analysis_notebooks.utils.evidence import (
+from RAG_model.retrieval.evidence import (
     best_evidence_match, calculate_claim_evidence_recall, load_evaluation_questions,
 )
-from RAG_model.model_analysis_notebooks.utils import retrieval_benchmark as rb
+from RAG_model.retrieval import retrieval_benchmark as rb
 
 ROOT = Path(__file__).resolve().parents[1]
 ACC = "0000950170-25-039374"
@@ -250,7 +250,7 @@ def test_fresh_ipython_kernel_run_all_with_mocks(tmp_path):
 import sys, runpy
 from pathlib import Path
 sys.path.insert(0, {str(ROOT/'src')!r})
-from RAG_model.model_analysis_notebooks.utils import retrieval_benchmark as rb
+from RAG_model.retrieval import retrieval_benchmark as rb
 FakeBackend = runpy.run_path({str(Path(__file__).resolve())!r})['FakeBackend']
 real_benchmark = rb.Benchmark
 fake_backend = FakeBackend()

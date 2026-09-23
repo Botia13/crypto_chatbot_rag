@@ -366,7 +366,6 @@ def retrieval_chunk(
 def fake_retrieval_models(monkeypatch):
     embedding_client = FakeRetrievalEmbeddingClient()
     bm25 = FakeBm25()
-    monkeypatch.setattr(answer_module, "client", embedding_client)
     monkeypatch.setattr(answer_module, "_bm25", bm25)
     return embedding_client, bm25
 
@@ -379,7 +378,8 @@ def test_single_scope_filters_both_prefetches_and_fusion(fake_retrieval_models):
     )
 
     chunks, usage = answer_module.fetch_context(
-        question, 20, "embedding-model", "collection", client
+        question, 20, "embedding-model", "collection", client,
+        fake_retrieval_models[0],
     )
 
     assert [item["chunk_id"] for item in chunks] == ["feth-1"]
@@ -416,7 +416,8 @@ def test_multi_ticker_searches_share_embedding_and_merge_round_robin(
     )
 
     chunks, _ = answer_module.fetch_context(
-        question, 20, "embedding-model", "collection", client
+        question, 20, "embedding-model", "collection", client,
+        fake_retrieval_models[0],
     )
 
     assert [item["chunk_id"] for item in chunks] == [
@@ -440,7 +441,8 @@ def test_duplicate_chunk_ids_keep_the_first_occurrence(fake_retrieval_models):
     )
 
     chunks, _ = answer_module.fetch_context(
-        question, 20, "embedding-model", "collection", client
+        question, 20, "embedding-model", "collection", client,
+        fake_retrieval_models[0],
     )
 
     assert [item["chunk_id"] for item in chunks] == ["feth-1", "feth-2"]
@@ -456,6 +458,7 @@ def test_missing_filing_skips_embedding_and_search(fake_retrieval_models):
         "embedding-model",
         "collection",
         client,
+        fake_retrieval_models[0],
     )
 
     assert chunks == []
@@ -477,7 +480,8 @@ def test_scope_violation_fails_instead_of_leaking_wrong_filing(
 
     with pytest.raises(AssertionError, match="Filter violation"):
         answer_module.fetch_context(
-            question, 20, "embedding-model", "collection", client
+            question, 20, "embedding-model", "collection", client,
+            fake_retrieval_models[0],
         )
 
 
@@ -506,7 +510,7 @@ def test_raw_retrieval_preserves_order_without_calling_reranker(monkeypatch):
         "rerank": False,
     }
 
-    result = answer_module.retrieve("question", config, object())
+    result = answer_module.retrieve("question", config, object(), object())
 
     assert result["Retrieved Chunk texts"] == expected
     assert result["Similarity Scores"] == [

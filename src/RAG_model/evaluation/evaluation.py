@@ -1,4 +1,4 @@
-from RAG_model.model_analysis_notebooks.utils.result_metrics import (
+from RAG_model.retrieval.result_metrics import (
     reciprocal_rank, mean_reciprocal_rank, normalize_accession_number,
     parse_expected_documents, unique_ranked_documents, is_answerable,
 )
@@ -17,6 +17,7 @@ from ragas.llms import llm_factory
 from ragas.metrics import Faithfulness,FactualCorrectness,LLMContextPrecisionWithReference
 from RAG_model.ingestion.config import BASELINE_RUN_CONFIG, OPENROUTER_BASE_URL, DB_PATH_NAME, SYSTEM_PROMPT, questions_file
 from RAG_model.ingestion.ingestion import ingestion
+from RAG_model.ingestion.embedding import create_openrouter_client
 from pathlib import Path
 from tqdm import tqdm
 from qdrant_client import QdrantClient
@@ -34,7 +35,7 @@ def answer(*args, **kwargs):
 
 
 _PREPARED_COLLECTIONS: set[tuple] = set()
-from RAG_model.model_analysis_notebooks.utils.evidence import (
+from RAG_model.retrieval.evidence import (
     CLAIM_EVIDENCE_MATCH_THRESHOLD,
     EVIDENCE_METRIC_VERSION,
     load_evaluation_questions,
@@ -66,7 +67,7 @@ def print_progress(
 
 # Read the questions file 
 # Create evaluator LLM
-from RAG_model.model_analysis_notebooks.utils.ragas_factory import create_ragas_metrics
+from RAG_model.retrieval.ragas_factory import create_ragas_metrics
         
     
 # Helper Functions 
@@ -118,12 +119,13 @@ def evaluate_question_deterministic(
     system_prompt: str = SYSTEM_PROMPT,
     qdrant_client=None,
     retrieval_only: bool = False,
+    provider_client=None,
 ):
     
     # Answer the question using the current run_config
     if retrieval_only:
         result = retrieve(
-            question_record["question"], run_config, qdrant_client
+            question_record["question"], run_config, qdrant_client, provider_client
         )
     else:
         result = answer(
@@ -131,6 +133,7 @@ def evaluate_question_deterministic(
             run_config=run_config,
             system_prompt=system_prompt,
             qdrant_client=qdrant_client,
+            provider_client=provider_client,
             history=None,
         )
     
@@ -301,6 +304,7 @@ async def evaluate_all_questions(
     qdrant_client=None,
     return_values=True,
     retrieval_only=False,
+    provider_client=None,
 ):
     question_results = []
 
@@ -324,7 +328,12 @@ async def evaluate_all_questions(
         
         try:
             deterministic_answer = evaluate_question_deterministic(
-                question_dict, run_config,system_prompt, qdrant_client, retrieval_only
+                question_dict,
+                run_config,
+                system_prompt=system_prompt,
+                qdrant_client=qdrant_client,
+                provider_client=provider_client,
+                retrieval_only=retrieval_only,
             )
             ragas_result = await evaluate_question_ragas(
                 deterministic_answer, metrics, return_values and not retrieval_only
@@ -520,13 +529,21 @@ async def evaluate(
     run_config = normalize_run_config(run_config)
     prepare_vector_index(run_config)
     qdrant_client = QdrantClient(path=str(DB_PATH_NAME))
+    provider_client = create_openrouter_client()
     try:
         evaluated_questions = await evaluate_all_questions(
-            df_questions, run_config,system_prompt, metrics, qdrant_client,
-            return_values, retrieval_only
+            df_questions,
+            run_config,
+            system_prompt=system_prompt,
+            metrics=metrics,
+            qdrant_client=qdrant_client,
+            provider_client=provider_client,
+            return_values=return_values,
+            retrieval_only=retrieval_only,
         )
     finally:
         qdrant_client.close()
+        provider_client.close()
     formatted_questions = pd.DataFrame(evaluated_questions['question_results'])
     summary = summarize_evaluation(formatted_questions)
     
