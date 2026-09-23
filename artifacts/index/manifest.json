@@ -1,0 +1,16 @@
+{
+  "pipeline_version": "v5",
+  "collection": "sec_filings__chunk-500__overlap-120__encoding-cl100k_base__embedding-openai-text-embedding-3-small",
+  "embedding_model": "openai/text-embedding-3-small",
+  "generation_model": "openai/gpt-5.6-luna",
+  "chunk_size": 500,
+  "chunk_overlap": 120,
+  "encoding": "cl100k_base",
+  "candidate_k": 20,
+  "retrieval_k": 20,
+  "reranking": false,
+  "vectors": ["dense", "bm25"],
+  "fusion": "rrf",
+  "distance": "cosine",
+  "storage_mode": "packaged-read-only"
+}

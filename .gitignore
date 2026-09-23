@@ -1,15 +1,18 @@
 .env
-__pycache__/
-*.pyc
 .venv/
+.venv-incomplete/
 
-# Generated local data
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.pytest_tmp/
+.mypy_cache/
+.ruff_cache/
+
 data/qdrant_storage/
 data/parquet_files/
-data/rag_evaluation/results/*
-!data/rag_evaluation/evaluation_questions_v4.csv
-outputs/evaluation-audit
-tests/
+data/rag_evaluation/results/
+outputs/
+backups/
 
-# Jupyter
 .ipynb_checkpoints/
