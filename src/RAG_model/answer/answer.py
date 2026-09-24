@@ -51,7 +51,7 @@ def generate_response(messages, run_config: dict, provider_client):
         model=run_config["generation_model"],
         messages=messages,
         temperature=run_config["temperature"],
-        max_tokens=1000
+        max_tokens=run_config.get("max_generation_tokens", 1000),
     )
 
     choices = response.choices or []
