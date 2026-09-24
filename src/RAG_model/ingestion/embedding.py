@@ -18,17 +18,22 @@ EMBEDDING_METADATA_FIELDS = (
 EMBEDDING_INPUT_VERSION = "metadata-v1"
 
 # Create a small client factory 
-def create_openrouter_client():
-    
-    api_key = os.getenv("OPENROUTER_API_KEY")
+def create_openrouter_client(
+    api_key: str | None = None,
+    timeout: float = 60.0,
+    max_retries: int = 8,
+):
+    api_key = api_key or os.getenv("OPENROUTER_API_KEY")
     
     if not api_key:
         raise ValueError("There is no Open Router Key configured.")
     
-    return OpenAI(api_key = api_key,
-                  base_url= OPENROUTER_BASE_URL,
-                  max_retries=8,
-                  timeout=60.0)
+    return OpenAI(
+        api_key=api_key,
+        base_url=OPENROUTER_BASE_URL,
+        max_retries=max_retries,
+        timeout=timeout,
+    )
 
 
 def embedding_text(chunk: dict) -> str:

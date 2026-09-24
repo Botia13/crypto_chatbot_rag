@@ -1,19 +1,20 @@
 import re
 from math import ceil
-from RAG_model.ingestion.embedding import create_openrouter_client
-from qdrant_client import QdrantClient
-from time import perf_counter
 from pathlib import Path
+from time import perf_counter
+
 from dotenv import load_dotenv
-from RAG_model.ingestion.config import DB_PATH_NAME, BASELINE_RUN_CONFIG, SYSTEM_PROMPT
+from fastembed import SparseTextEmbedding
+from qdrant_client import QdrantClient, models
 from tenacity import (
     retry,
     retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
 )
-from qdrant_client import models          
-from fastembed import SparseTextEmbedding  
+
+from RAG_model.ingestion.config import BASELINE_RUN_CONFIG, DB_PATH_NAME, SYSTEM_PROMPT
+from RAG_model.ingestion.embedding import create_openrouter_client
 from RAG_model.retrieval.full_benchmark import (
     question_constraints,
     resolve_searches,
@@ -25,13 +26,26 @@ from RAG_model.retrieval.retrieval_benchmark import (
     round_robin,
 )
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 load_dotenv(PROJECT_ROOT / ".env")
 
 
 
-_bm25 = SparseTextEmbedding(model_name="Qdrant/bm25") 
+_bm25 = SparseTextEmbedding(model_name="Qdrant/bm25")
+
+SOURCE_MARKER_PATTERN = re.compile(
+    r"\[SOURCE:\s*([^\]\}\r\n]+?)\s*[\]\}]",
+    re.IGNORECASE,
+)
+
+QUERY_REWRITE_SYSTEM_PROMPT = """You rewrite conversational follow-up questions
+into standalone search questions for SEC filings.
+
+Use the conversation only to resolve omitted tickers, entities, metrics,
+reporting periods, and comparison targets. Preserve the current user's intent.
+Do not answer the question. Return only the standalone question, with no label,
+explanation, quotation marks, or citation markers.
+"""
 
 
 class EmptyGenerationResponseError(RuntimeError):
@@ -45,13 +59,28 @@ class EmptyGenerationResponseError(RuntimeError):
     reraise=True,
 )
 
-def generate_response(messages, run_config: dict, provider_client):
+def generate_response(
+    messages,
+    run_config: dict,
+    provider_client,
+    *,
+    max_tokens: int | None = None,
+    temperature: float | None = None,
+):
     """Generate an answer and retry a transient empty provider response."""
     response = provider_client.chat.completions.create(
         model=run_config["generation_model"],
         messages=messages,
-        temperature=run_config["temperature"],
-        max_tokens=run_config.get("max_generation_tokens", 1000),
+        temperature=(
+            run_config["temperature"]
+            if temperature is None
+            else temperature
+        ),
+        max_tokens=(
+            run_config.get("max_generation_tokens", 1000)
+            if max_tokens is None
+            else max_tokens
+        ),
     )
 
     choices = response.choices or []
@@ -68,6 +97,79 @@ def generate_response(messages, run_config: dict, provider_client):
         )
 
     return response
+
+
+def rewrite_followup_question(
+    question: str,
+    history: list[dict] | None,
+    run_config: dict,
+    provider_client,
+) -> dict:
+    """Resolve conversational references before retrieval."""
+    if not history:
+        return {
+            "question": question,
+            "latency_ms": 0.0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+        }
+
+    messages = (
+        [{"role": "system", "content": QUERY_REWRITE_SYSTEM_PROMPT}]
+        + history
+        + [{"role": "user", "content": question}]
+    )
+
+    rewrite_start = perf_counter()
+    response = generate_response(
+        messages,
+        run_config,
+        provider_client,
+        max_tokens=run_config.get("max_query_rewrite_tokens", 128),
+        temperature=0,
+    )
+    rewrite_latency_ms = (perf_counter() - rewrite_start) * 1000
+
+    rewritten_question = response.choices[0].message.content.strip()
+    if (
+        len(rewritten_question) >= 2
+        and rewritten_question[0] == rewritten_question[-1]
+        and rewritten_question[0] in {'"', "'"}
+    ):
+        rewritten_question = rewritten_question[1:-1].strip()
+
+    if not rewritten_question:
+        raise EmptyGenerationResponseError(
+            "Question rewrite returned no usable text."
+        )
+
+    usage = response.usage
+    return {
+        "question": rewritten_question,
+        "latency_ms": rewrite_latency_ms,
+        "input_tokens": usage.prompt_tokens if usage else None,
+        "output_tokens": usage.completion_tokens if usage else None,
+        "total_tokens": usage.total_tokens if usage else None,
+    }
+
+
+def extract_citations_and_clean_answer(
+    answer_text: str | None,
+) -> tuple[str, list[str]]:
+    """Remove machine-readable source markers after extracting their IDs."""
+    answer_text = answer_text or ""
+    citations = []
+    for match in SOURCE_MARKER_PATTERN.finditer(answer_text):
+        citation_id = match.group(1).strip()
+        if citation_id and citation_id not in citations:
+            citations.append(citation_id)
+    clean_answer = SOURCE_MARKER_PATTERN.sub("", answer_text)
+    clean_answer = re.sub(r"[ \t]+(?=[,.;:!?])", "", clean_answer)
+    clean_answer = re.sub(r"(?<=\S)[ \t]{2,}(?=\S)", " ", clean_answer)
+    clean_answer = re.sub(r"(?m)[ \t]+$", "", clean_answer)
+    clean_answer = re.sub(r"\n{3,}", "\n\n", clean_answer).strip()
+    return clean_answer, citations
 
 def load_filing_catalog(qdrant_client, collection_name: str) -> list[dict]:
     """Return one metadata record per filing stored in the collection.
@@ -268,7 +370,14 @@ def retrieve(question: str, run_config: dict, qdrant_client, provider_client):
 from RAG_model.answer.prompt import make_rag_messages
    
    
-def format_answer(question,chunks,generation_result,embedding_usage, retrieval_latency_ms):
+def format_answer(
+    question,
+    chunks,
+    generation_result,
+    embedding_usage,
+    retrieval_latency_ms,
+    rewrite_result,
+):
     
     similarity_scores = [
         {
@@ -280,29 +389,41 @@ def format_answer(question,chunks,generation_result,embedding_usage, retrieval_l
 
     prompt_latency_ms = generation_result["prompt_latency_ms"]
     generation_latency_ms = generation_result["generation_latency_ms"]
+    rewrite_latency_ms = rewrite_result["latency_ms"]
 
     latency_ms = {
+        "query_rewrite": rewrite_latency_ms,
         "retrieval": retrieval_latency_ms,
         "prompt_building": prompt_latency_ms,
         "generation": generation_latency_ms,
         "total": (
-            retrieval_latency_ms
+            rewrite_latency_ms
+            + retrieval_latency_ms
             + prompt_latency_ms
             + generation_latency_ms
         ),
     }
 
     embedding_tokens = embedding_usage.get("total_tokens")
+    rewrite_tokens = rewrite_result.get("total_tokens")
     generation_tokens = generation_result.get(
         "generation_total_tokens"
     )
 
-    if embedding_tokens is not None and generation_tokens is not None:
-        rag_total_tokens = embedding_tokens + generation_tokens
+    if all(
+        value is not None
+        for value in (rewrite_tokens, embedding_tokens, generation_tokens)
+    ):
+        rag_total_tokens = (
+            rewrite_tokens + embedding_tokens + generation_tokens
+        )
     else:
         rag_total_tokens = None
 
     token_usage = {
+        "rewrite_input_tokens": rewrite_result.get("input_tokens"),
+        "rewrite_output_tokens": rewrite_result.get("output_tokens"),
+        "rewrite_total_tokens": rewrite_tokens,
         "embedding_input_tokens": embedding_usage.get("input_tokens"),
         "embedding_total_tokens": embedding_tokens,
         "generation_input_tokens": generation_result.get(
@@ -348,13 +469,11 @@ def answer_from_chunks(
     
     usage = response.usage
     answer_text = response.choices[0].message.content
+    clean_answer, citations = extract_citations_and_clean_answer(answer_text)
     
     return {
-        "answer": answer_text,
-        "citations": re.findall(
-            r"\[SOURCE:\s*([^\]]+)\]",
-            answer_text or "",
-        ),
+        "answer": clean_answer,
+        "citations": citations,
         "generation_latency_ms": (
             generation_end - generation_start
         ) * 1000,
@@ -384,8 +503,19 @@ def answer(
     if qdrant_client is None:
         raise ValueError("A Qdrant client is required to answer a question.")
 
+    history = history or []
+    rewrite_result = rewrite_followup_question(
+        question=question,
+        history=history,
+        run_config=run_config,
+        provider_client=provider_client,
+    )
+
     retrieval_result = retrieve(
-        question, run_config, qdrant_client, provider_client
+        rewrite_result["question"],
+        run_config,
+        qdrant_client,
+        provider_client,
     )
     chunks = retrieval_result["Retrieved Chunk texts"]
 
@@ -407,6 +537,7 @@ def answer(
             "total_tokens": retrieval_result["Token_usage"]["embedding_total_tokens"],
         },
         retrieval_latency_ms=retrieval_result["Latency"]["retrieval"],
+        rewrite_result=rewrite_result,
     )
 
 

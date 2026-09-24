@@ -55,4 +55,10 @@ def get_runtime_qdrant() -> RuntimeQdrant:
         client=client,
         directory=runtime_path,
     )
-    
+
+
+def close_runtime_qdrant() -> None:
+    """Close and discard the cached writable runtime copy, if initialized."""
+    if get_runtime_qdrant.cache_info().currsize:
+        get_runtime_qdrant().close()
+        get_runtime_qdrant.cache_clear()

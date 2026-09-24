@@ -25,7 +25,7 @@ BASELINE_RUN_CONFIG = {
     "candidate_k": 20,
     "generation_model": "openai/gpt-5.6-luna",
     "temperature": 0,
-    "prompt_version": "v2",
+    "prompt_version": "v3",
     
     # RAGAS paramaters
     "ragas_enabled": True,
