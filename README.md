@@ -1,5 +1,4 @@
-# Crypto SEC Fillings Chat 
-# Crypto SEC Filings RAG
+# Crypto SEC Fillings Chat (RAG project)
 
 A production-oriented Retrieval-Augmented Generation system for researching cryptocurrency-exposed public companies through their SEC filings.
 
