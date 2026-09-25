@@ -8,7 +8,7 @@ The application combines dense retrieval, BM25 sparse retrieval, metadata filter
 
 ## Live application
 
-- **Live demo:** [TODO: Add Vercel URL](https://example.vercel.app)
+- **Live demo:** [crypto-chatbot-rag.vercel.app](https://crypto-chatbot-rag.vercel.app/)
 - **Repository:** [github.com/Botia13/crypto_chatbot_rag](https://github.com/Botia13/crypto_chatbot_rag)
 
 ![Chat interface](images/image-1.png)
