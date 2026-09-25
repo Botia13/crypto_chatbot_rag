@@ -1,4 +1,4 @@
-# Crypto SEC Fillings Chat (RAG project)
+# Crypto SEC Filings Chat (RAG project)
 
 A production-oriented Retrieval-Augmented Generation system for researching cryptocurrency-exposed public companies through their SEC filings.
 
@@ -108,7 +108,7 @@ Each question produces:
 - A fused candidate ranking using Reciprocal Rank Fusion
 
 #### 4.1 Metadata Filtering 
-For each retrieval is applied a metadata filtering before retrieval, this with the goal of retrieving only the relevant chunks from the databsse, the filters that are being used are: Ticket, Year and Accession number 
+For each retrieval is applied a metadata filtering before retrieval, this with the goal of retrieving only the relevant chunks from the database, the filters that are being used are: Ticket,form and Period 
 This prevents irrelevant filings from consuming the candidate limit or leaking into the final context.
 
 
