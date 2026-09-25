@@ -351,10 +351,6 @@ Always verify important information using the linked SEC source documents.
 
 ## License
 
-TODO: Add the selected license.
-
-If using the MIT License:
-
 ```text
 This project is licensed under the MIT License. See LICENSE for details.
 ```
