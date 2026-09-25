@@ -9,6 +9,7 @@ __pycache__/
 .pytest-tmp/
 .mypy_cache/
 .ruff_cache/
+.vscode/
 
 data/qdrant_storage/
 data/parquet_files/

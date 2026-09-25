@@ -1,21 +1,21 @@
-# Crypto SEC Fillings Chat (RAG project)
+# Crypto SEC Filings Chat (RAG Project)
 
-A production-oriented Retrieval-Augmented Generation system for researching cryptocurrency-exposed public companies through their SEC filings.
+A production-oriented retrieval-augmented generation (RAG) system for researching cryptocurrency-exposed public companies through their SEC filings.
 
-The application combines dense retrieval, BM25 sparse retrieval, metadata filtering, Reciprocal Rank Fusion, grounded answer generation, and source citations. It includes a FastAPI API, a Gradio interface, deterministic and model-based evaluation and a containerized Vercel deployment.
+The application combines dense retrieval, BM25 sparse retrieval, metadata filtering, Reciprocal Rank Fusion (RRF), grounded answer generation, and source citations. It includes a FastAPI API, a Gradio interface, deterministic and model-based evaluation, and a containerized Vercel deployment.
 
 > This project is an educational research tool. It does not provide financial or investment advice.
 
 ## Live application
 
 - **Live demo:** [TODO: Add Vercel URL](https://example.vercel.app)
-- **Repository:** (https://github.com/Botia13/crypto_chatbot_rag)
+- **Repository:** [github.com/Botia13/crypto_chatbot_rag](https://github.com/Botia13/crypto_chatbot_rag)
 
-![Tool Chat Interface](images/image-1.png)
+![Chat interface](images/image-1.png)
 
 ## Project overview
 
-Financial information about crypto-related investment products is often distributed across long and structurally complex SEC filings. A normal language model may answer from outdated knowledge, omit important context, or generate unsupported statements.
+Financial information about crypto-related investment products is often distributed across long, structurally complex SEC filings. A general-purpose language model may answer from outdated knowledge, omit important context, or generate unsupported statements.
 
 This project addresses that problem with a RAG pipeline that:
 
@@ -23,10 +23,40 @@ This project addresses that problem with a RAG pipeline that:
 2. Preserves filing and section metadata.
 3. Splits filing content into retrieval-ready chunks.
 4. Creates dense and BM25 sparse representations.
-5. Retrieves evidence using metadata-filtered hybrid search.
+5. Retrieves evidence with metadata-filtered hybrid search.
 6. Generates an answer using only the retrieved evidence.
 7. Returns citations, source links, latency, token usage, and retrieval diagnostics.
 8. Evaluates retrieval and generation separately.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    subgraph Build[Offline ingestion and evaluation]
+        SEC[SEC filings] --> Parse[Parse text, tables, and metadata]
+        Parse --> Chunk[Create deterministic chunks]
+        Chunk --> Embed[Generate dense and BM25 vectors]
+        Embed --> Index[(Versioned Qdrant index)]
+        Index --> Eval[Retrieval and generation evaluation]
+        Eval --> Report[Static evaluation report]
+    end
+
+    subgraph Runtime[Vercel runtime]
+        User[User] --> UI[Gradio UI]
+        UI --> API[FastAPI]
+        API --> Service[RAG service]
+        Service --> Scope[Resolve ticker, form, and period]
+        Scope --> Search[Metadata-filtered hybrid search]
+        Search --> Context[Balanced, deduplicated context]
+        Context --> LLM[Grounded answer generation]
+        LLM --> Validate[Citation validation]
+        Validate --> UI
+    end
+
+    Index -. copied at startup .-> RuntimeIndex[(Temporary Qdrant copy)]
+    RuntimeIndex --> Search
+    Report -. displayed by app .-> UI
+```
 
 ## Supported corpus
 
@@ -57,7 +87,6 @@ Every indexed chunk retains provenance metadata such as:
 
 The source documents are public SEC filings. The SEC remains the authoritative source.
 
-
 ## RAG pipeline
 
 ### 1. SEC filing ingestion
@@ -73,7 +102,7 @@ It extracts:
 - Reporting periods
 - Source URLs and accession numbers
 
-The pipeline retains table structure to avoid flattening financial labels, reporting periods, units, and values into unrelated text.
+The pipeline retains table structure so financial labels, reporting periods, units, and values are not flattened into unrelated text.
 
 ### 2. Chunking
 
@@ -86,17 +115,13 @@ The selected production configuration uses:
 | Encoding | `cl100k_base` |
 | Pipeline version | `v5` |
 
-Chunk identifiers are deterministic so the same source section produces stable point identifiers across repeatable ingestion runs.
+Chunk identifiers are deterministic, so the same source section produces stable point identifiers across repeatable ingestion runs.
 
 ### 3. Embeddings
 
-Dense embeddings are generated with:
+Dense embeddings are generated with `openai/text-embedding-3-small`.
 
-```text
-openai/text-embedding-3-small
-```
-
-The embedding input includes document metadata alongside the chunk content. This helps retrieval distinguish similar passages belonging to different funds, forms, and reporting periods.
+The embedding input includes document metadata alongside the chunk content. This helps retrieval distinguish similar passages from different funds, forms, and reporting periods.
 
 ### 4. Hybrid retrieval
 
@@ -104,22 +129,21 @@ Each question produces:
 
 - One dense query vector
 - One BM25 sparse query vector
-- Metadata filters derived from the requested ticker, form, and period
-- A fused candidate ranking using Reciprocal Rank Fusion
+- Metadata filters derived from the requested ticker, form type, and reporting period
+- A fused candidate ranking using RRF
 
-#### 4.1 Metadata Filtering 
-For each retrieval is applied a metadata filtering before retrieval, this with the goal of retrieving only the relevant chunks from the databsse, the filters that are being used are: Ticket, Year and Accession number 
-This prevents irrelevant filings from consuming the candidate limit or leaking into the final context.
+#### 4.1 Metadata filtering
 
+Before retrieval, the system resolves natural-language constraints against the filing catalog. It always applies a ticker filter when the question identifies a supported ticker. When the question also identifies a form type or reporting period, the system resolves matching filings and filters on the exact `form_type` and `period_end` values.
+
+The same filter is applied to both dense and sparse prefetches and to the final fused query. This prevents unrelated filings from consuming the candidate limit or entering the final context. Accession numbers remain part of each chunk's provenance and uniquely identify filings.
 
 ### 5. Multi-document retrieval
 
-Comparison questions can require evidence from multiple funds or filings.
-
-The system:
+Comparison questions can require evidence from multiple funds or filings. The system:
 
 1. Resolves each requested filing scope.
-2. Runs filtered searches for each scope.
+2. Runs a filtered search for each scope.
 3. Reuses the same query embedding.
 4. Interleaves results across scopes.
 5. Deduplicates repeated chunks.
@@ -146,7 +170,6 @@ Citation validation is deterministic. It does not prove that an answer is factua
 
 | Component | Selected value |
 |---|---|
-
 | Chunk size | `500` |
 | Chunk overlap | `120` |
 | Dense embedding | `openai/text-embedding-3-small` |
@@ -157,7 +180,7 @@ Citation validation is deterministic. It does not prove that an answer is factua
 | Generation model | `openai/gpt-5.6-luna` |
 | Temperature | `0` |
 
-Reranking was evaluated but is disabled in the selected configuration. Below is explained why is not used.
+Reranking was evaluated but is disabled in the selected configuration. The rationale is explained below.
 
 ## Evaluation methodology
 
@@ -187,7 +210,7 @@ These metrics use an evaluator model and should be interpreted as estimates:
 - Factual correctness
 - Context precision
 
-Model-based metrics are reported separately because they can vary with evaluator model, prompt, and threshold.
+Model-based metrics are reported separately because they can vary with the evaluator model, prompt, and threshold.
 
 ### Evaluation dataset
 
@@ -204,13 +227,9 @@ The evaluation dataset includes:
 
 ## Final results
 
-![Final results](images/image-2.png)
+![Final evaluation results](images/image-2.png)
 
-The complete static evaluation summary is available in:
-
-```text
-artifacts/evaluation/summary.json
-```
+The complete static evaluation summary is available in [`artifacts/evaluation/summary.json`](artifacts/evaluation/summary.json).
 
 The hosted application displays this versioned report instead of rerunning the paid evaluation suite.
 
@@ -228,44 +247,48 @@ The project evaluated multiple combinations of:
 - Generation models
 - Single-document and multi-document strategies
 
-The process that was used to Select the best model configuration was the following:
+The model-selection process was:
 
-|->Baseline Model(Parameters selected from the literature but not tested against the data for the project)
-|-> Select the best retrieval parameters
-|-> Select the best retrieval method 
-    -> Type of retrieval (Dense, BM25 or Hybrid)
-    -> Additional filters to improve the retrieval (Subqueries vs metadata pre-filtering vs Question re-writing)
-    -> The use of Reranker
-|-> Improvement of the prompt 
+1. Establish a literature-informed baseline.
+2. Select the strongest retrieval depth, chunk size, and chunk overlap.
+3. Compare dense, BM25, and hybrid retrieval.
+4. Compare subqueries, metadata pre-filtering, and query rewriting.
+5. Measure whether reranking justifies its runtime cost.
+6. Refine the generation prompt.
 
-You can find the complete experiments in the following folder: src\RAG_model\model_analysis_notebooks
+The experiment notebooks are in [`src/RAG_model/model_analysis_notebooks/`](src/RAG_model/model_analysis_notebooks/).
 
 ### Selected configuration
-#### Retrieval Parameters: 
-For these parameters we used the Documnet Hit Rate, Recall and MRR to select the best parameters
-1. Retrieval - K: 
 
-![retrieval_k](images/image-3.png)
+#### Retrieval parameters
 
-2. Chunk Size + Chunk Overlap:
+Document hit rate, recall, and Mean Reciprocal Rank were used to select the retrieval parameters.
 
-![chunks](images/image-6.png) 
+1. Retrieval depth (`k`):
+
+   ![Retrieval depth experiment](images/image-3.png)
+
+2. Chunk size and overlap:
+
+   ![Chunk size and overlap experiment](images/image-6.png)
 
 ### Why hybrid retrieval?
 
-Dense retrieval is useful for semantic similarity, while BM25 helps recover exact terminology, financial labels, tickers, and form-specific language. Reciprocal Rank Fusion combines both rankings without requiring their raw scores to be directly comparable.
+Dense retrieval is useful for semantic similarity, while BM25 helps recover exact terminology, financial labels, tickers, and form-specific language. RRF combines both rankings without requiring their raw scores to be directly comparable.
 
 ### Why metadata filtering?
-We experiment with multiple types of filtering to improve the retrieval values, those experiments present the below values, but at thend we select the Ticker filtering due to the best results that presented comparing with the other types. 
-WE also noticed that financial questions often identify a specific ticker, filing type, or reporting period. Filtering prevents semantically similar passages from unrelated filings from entering the context.
 
-![experiments](images/image-9.png)
+The experiments compared unfiltered retrieval, ticker filtering, ticker-and-period filtering, query rewriting, and subquery strategies. Ticker filtering provided the strongest general trade-off in the benchmark. In production, the resolver also applies exact form-type and reporting-period filters when the question provides those constraints.
+
+Financial questions often identify a specific ticker, filing type, or reporting period. Applying these filters before retrieval prevents semantically similar passages from unrelated filings from entering the context.
+
+![Metadata-filtering experiments](images/image-9.png)
 
 ### Why is reranking disabled?
+
 Reranking produced only a small retrieval improvement while increasing cold-start time, runtime dependencies, memory consumption, and request latency. The non-reranked hybrid configuration therefore provided the better production trade-off for this portfolio deployment.
 
-![Reranking](images/image-7.png)
-
+![Reranking experiment](images/image-7.png)
 
 ## Deployment architecture
 
@@ -286,9 +309,9 @@ It has deliberate limitations:
 - Every cold instance copies the index.
 - Cold starts are slower than warm requests.
 - Updating the corpus requires rebuilding and redeploying the index.
-- A larger or frequently updated production system should use a managed persistent vector database.
+- A larger or frequently updated production system should use a managed, persistent vector database.
 
-This is a deployment optimization for a portfolio demonstration, not a recommendation for a large mutable production workload.
+This is a deployment optimization for a portfolio demonstration, not a recommendation for a large, mutable production workload.
 
 ## Cost and security controls
 
@@ -302,7 +325,6 @@ The public application includes:
 - Generic user-facing errors
 - Citation validation
 - Read-only vector storage
-
 
 The OpenRouter key used by the deployment should:
 
@@ -324,13 +346,12 @@ The OpenRouter key used by the deployment should:
 - Cold starts are slower because the packaged index must be copied to temporary storage.
 - The project does not provide financial advice.
 
-
 ## Future improvements
 
 Potential improvements include:
 
 - Incremental ingestion for new filings
-- Managed persistent Qdrant for mutable deployments
+- Managed, persistent Qdrant for mutable deployments
 - Distributed rate limiting
 - Streaming responses
 - Improved table retrieval
@@ -338,8 +359,6 @@ Potential improvements include:
 - Reranking when its quality gain justifies the runtime cost
 - Human feedback collection
 - Evaluation monitoring across pipeline versions
-
-
 
 ## Disclaimer
 
@@ -351,6 +370,4 @@ Always verify important information using the linked SEC source documents.
 
 ## License
 
-```text
-This project is licensed under the MIT License. See LICENSE for details.
-```
+This project is licensed under the MIT License. See the [`LICENSE`](LICENSE) file for details.
