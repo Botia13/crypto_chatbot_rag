@@ -581,7 +581,9 @@ def create_gradio_app(
 
         with gr.Tab("About"):
             gr.Markdown(
-                "This system answers questions using SEC filing evidence."
+                "This system answers questions using SEC filing evidence.\n\n"
+                "[View the project on GitHub]("
+                "https://github.com/Botia13/crypto_chatbot_rag)"
             )
 
     return demo
