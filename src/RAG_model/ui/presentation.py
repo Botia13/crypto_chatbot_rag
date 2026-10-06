@@ -205,9 +205,11 @@ RESEARCH_CSS = """
 #research-app #question-input textarea { line-height: 1.6; }
 #research-app #ask-question { align-self: stretch; min-height: 84px; }
 #research-app .example-card {
-    text-align: left; white-space: pre-line; line-height: 1.7;
-    padding: 16px 18px; font-size: 13px; font-weight: 500; min-height: 88px;
+    text-align: left; justify-content: flex-start; white-space: normal;
+    overflow-wrap: anywhere; line-height: 1.65; width: 100%;
+    padding: 16px 20px; font-size: 14px; font-weight: 400; min-height: 0;
 }
+#research-app #example-prompts { gap: 10px; }
 #research-app .example-card:hover { border-color: #72D5BF; }
 #research-app #evidence-panel {
     background: #1A2628; border: 1px solid #334649; border-radius: 16px;
@@ -277,7 +279,7 @@ RESEARCH_CSS = """
         min-width: 0 !important; width: 100%;
     }
     #research-app #ask-question { min-height: 48px; }
-    #research-app .example-card { min-height: 68px; padding: 12px 16px; }
+    #research-app .example-card { padding: 14px 16px; }
     #research-app #evidence-panel { padding: 18px; }
     #research-app #evaluation-prompt { padding: 12px; }
     #research-app #evaluation-prompt pre { padding: 12px; }

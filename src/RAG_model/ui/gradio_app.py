@@ -66,12 +66,6 @@ SUGGESTED_QUESTIONS = (
     ),
 )
 
-SUGGESTED_LABELS = (
-    "01  /  FUND MECHANICS\nIBIT · Trading, benchmark & NAV ↗",
-    "02  /  CREATION & REDEMPTION\nFBTC · Shares & bitcoin baskets ↗",
-    "03  /  FUND COMPARISON\nGBTC vs ETHE · Key differences ↗",
-)
-
 EVALUATION_TITLE = "Evidence behind the answers"
 EVALUATION_DESCRIPTION = (
     "A saved evaluation of 40 research questions, used during development "
@@ -513,17 +507,20 @@ def _build_research_tabs(ask: Callable, evaluation: dict) -> None:
                         min_width=140,
                         elem_id="ask-question",
                     )
-                gr.Markdown("**Start with a question**", elem_classes="evidence-note")
-                with gr.Row(elem_id="example-prompts"):
+                gr.Markdown(
+                    "**Suggested questions**\n\nSelect a question to ask it.",
+                    elem_classes="evidence-note",
+                )
+                with gr.Column(elem_id="example-prompts"):
                     suggestion_buttons = [
                         gr.Button(
-                            label,
+                            suggestion,
                             variant="secondary",
-                            min_width=170,
+                            min_width=0,
                             elem_classes="example-card",
                             elem_id=f"example-{index}",
                         )
-                        for index, label in enumerate(SUGGESTED_LABELS)
+                        for index, suggestion in enumerate(SUGGESTED_QUESTIONS)
                     ]
                 clear_button = gr.Button(
                     "Clear chat",
