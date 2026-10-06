@@ -8,7 +8,7 @@ import gradio as gr
 import pandas as pd
 import plotly.graph_objects as go
 
-from RAG_model.core.settings import PROJECT_ROOT
+from RAG_model.core.settings import PROJECT_ROOT, get_settings
 from RAG_model.service.rag_service import get_rag_service
 from RAG_model.ui.presentation import (
     BORDER,
@@ -442,9 +442,15 @@ def create_gradio_app(
         if not question:
             return "", history, EMPTY_CITATIONS, [], [], EMPTY_STATUS
 
-        result = service_factory().query(
+        service = service_factory()
+        history_limit = getattr(
+            service, "max_history_messages", get_settings().max_history_messages
+        )
+        # Keep the complete conversation on screen, but bound the model context.
+        request_history = history[-history_limit:] if history_limit else []
+        result = service.query(
             question=question,
-            history=history,
+            history=request_history,
         )
 
         return build_chat_outputs(question, history, result)
